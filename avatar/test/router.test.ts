@@ -1,11 +1,8 @@
-// Router tests: node:test via tsx. Run with `npm --prefix avatar/dev test`.
+// Router + stylist client tests: node:test via tsx. Run with `npm --prefix avatar/dev test`.
+// The fake Barn mirrors site/barn.js over the real catalog (data/catalog/products.json).
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import type { Product } from "../../contracts/product";
-import type { ShopBridge } from "../../contracts/shop-bridge";
-import type { StylistResponse } from "../../contracts/stylist";
-import { createFakeShop } from "../dev/src/fake-shop";
-import { STUB_PRODUCTS } from "../dev/src/stub-products";
 import {
   byteLength,
   createRouter,
@@ -15,7 +12,69 @@ import {
   type ToolCallMessage,
   type ToolResultMessage,
 } from "../router";
-import { mockStyleOutfit, type StyleOutfitFn } from "../style-outfit";
+import { mockStylist, parseBudget, readSse, stylistClient } from "../style-outfit";
+import type { Barn, BarnBag, RunRequest, StylistResult } from "../types";
+
+const CATALOG: any[] = JSON.parse(readFileSync(new URL("../../data/catalog/products.json", import.meta.url), "utf8"));
+const byId = Object.fromEntries(CATALOG.map((p) => [p.id, p]));
+
+/** Fake window.Barn with barn.js semantics, recording every call. */
+function fakeBarn() {
+  const calls: Array<[string, unknown[]]> = [];
+  let bag: Array<{ id: string; size: string; color: string; qty: number }> = [];
+  let hash = "";
+  const brief = (p: any) => ({ id: p.id, title: p.title, brand: p.brand, price: p.simulated.price });
+  const getBag = (): BarnBag => {
+    const items = bag.map((x) => ({ ...x, title: byId[x.id].title, price: byId[x.id].simulated.price }));
+    return { items, count: items.reduce((a, x) => a + x.qty, 0), total: items.reduce((a, x) => a + x.qty * x.price, 0) };
+  };
+  const barn: Barn = {
+    search(f) {
+      calls.push(["search", [f]]);
+      hash = "#/shop";
+      const words = (f.q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+      return CATALOG.filter(
+        (p) =>
+          (!f.max_price || p.simulated.price <= f.max_price) &&
+          (!f.color || (p.colors.join(" ") + p.title).toLowerCase().includes(f.color.toLowerCase())) &&
+          words.every((w) => (p.title + " " + p.brand + " " + p.subcategory).toLowerCase().includes(w)),
+      )
+        .slice(0, 5)
+        .map(brief);
+    },
+    openProduct(id) {
+      calls.push(["openProduct", [id]]);
+      const p = byId[id];
+      if (!p) return { ok: false, error: `No product with id ${id}` };
+      hash = `#/product/${id}`;
+      return { ok: true, ...brief(p), colors: p.colors, sizes: p.sizes.filter((s: string) => p.simulated.inventory[s] > 0) };
+    },
+    addToBag(id, size, color) {
+      calls.push(["addToBag", [id, size, color]]);
+      const p = byId[id];
+      if (!p) return { ok: false, error: `No product with id ${id}`, count: getBag().count };
+      const sz = p.size_type === "one" ? p.sizes[0] : size;
+      if (!sz) return { ok: false, error: "Which size?", count: getBag().count };
+      if (!(p.simulated.inventory[sz] > 0)) return { ok: false, error: `Size ${sz} is out of stock`, count: getBag().count };
+      bag.push({ id, size: sz, color: color ?? p.colors[0], qty: 1 });
+      return { ok: true, error: null, count: getBag().count };
+    },
+    getBag,
+    showLooks(r) {
+      calls.push(["showLooks", [r]]);
+      return { ok: true };
+    },
+    addFeedStep(s) {
+      calls.push(["addFeedStep", [s]]);
+      return { ok: true };
+    },
+    resetFeed() {
+      calls.push(["resetFeed", []]);
+      return { ok: true };
+    },
+  };
+  return { barn, calls, hash: () => hash, setBag: (b: typeof bag) => (bag = b) };
+}
 
 let n = 0;
 function call(name: string, args: Record<string, unknown> | string, conversation_id = "conv-1"): ToolCallMessage {
@@ -27,267 +86,216 @@ function call(name: string, args: Record<string, unknown> | string, conversation
   };
 }
 
-/** Wraps the fake shop and records every bridge call. */
-function spyShop(catalog: Product[] = STUB_PRODUCTS) {
-  const calls: Array<[string, unknown[]]> = [];
-  const inner = createFakeShop(catalog, () => {});
-  const bridge = new Proxy(inner, {
-    get(target, key: keyof ShopBridge) {
-      const fn = target[key] as (...a: unknown[]) => unknown;
-      return (...args: unknown[]) => {
-        calls.push([key, args]);
-        return fn.apply(target, args);
-      };
-    },
-  }) as ShopBridge;
-  return { bridge, calls };
-}
-
-function setup(over: Partial<RouterOptions> = {}, catalog?: Product[]) {
-  const shop = spyShop(catalog);
+function setup(over: Partial<RouterOptions> = {}) {
+  const fb = fakeBarn();
   const lines: string[] = [];
-  const router = createRouter({
-    bridge: shop.bridge,
-    styleOutfit: mockStyleOutfit(STUB_PRODUCTS, 0),
-    logger: (l) => lines.push(l),
-    ...over,
-  });
-  return { ...shop, router, lines };
+  const router = createRouter({ bridge: fb.barn, styleOutfit: mockStylist(["MW-0332"], 0), logger: (l) => lines.push(l), ...over });
+  return { ...fb, router, lines };
 }
 
-function assertWellFormed(r: ToolResultMessage | null, id?: string): asserts r is ToolResultMessage {
+function ok(r: ToolResultMessage | null, status: "success" | "error" = "success"): asserts r is ToolResultMessage {
   assert.ok(r, "expected a tool_result");
-  assert.equal(r.message_type, "conversation");
   assert.equal(r.event_type, "conversation.tool_result");
   assert.equal(r.conversation_id, "conv-1");
-  if (id) assert.equal(r.properties.tool_call_id, id);
   assert.ok(byteLength(r) < MAX_APP_MESSAGE_BYTES, `result is ${byteLength(r)}B`);
+  assert.equal(r.properties.status, status, JSON.stringify(r.properties.output));
 }
+const out = (r: ToolResultMessage) => r.properties.output as any;
 
 describe("search_products", () => {
-  it("filters through the bridge and returns at most 5 compact products", async () => {
+  it("maps tool args onto Barn.search filters and returns ≤5 briefs", async () => {
     const { router, calls } = setup();
-    const msg = call("search_products", { category: "shirt", max_price: "$80" });
-    const r = await router.handle(msg);
-    assertWellFormed(r, msg.properties.tool_call_id);
-    assert.deepEqual(calls[0], ["searchProducts", [{ category: "shirt", max_price: 80 }]]);
-    const out = r.properties.output as any;
-    assert.equal(r.properties.status, "success");
-    assert.ok(out.products.length > 0 && out.products.length <= 5);
-    for (const p of out.products) {
-      assert.deepEqual(Object.keys(p).sort(), ["id", "line", "name", "price_usd"]);
-      assert.ok(p.price_usd <= 80);
-    }
+    const r = await router.handle(
+      call("search_products", { query: "blazer", department: "suits", style: "Formal", color: "navy", max_price: "$600", on_sale: "true" }),
+    );
+    ok(r);
+    assert.deepEqual(calls[0], ["search", [{ q: "blazer", dept: "suits", style: "Formal", color: "navy", max_price: 600, sale: true }]]);
+    assert.ok(out(r).products.length <= 5);
   });
 
-  it("adds a hint when nothing matches", async () => {
+  it("returns real products with id/title/brand/price only", async () => {
     const { router } = setup();
-    const r = await router.handle(call("search_products", { query: "tuxedo kilt" }));
-    assertWellFormed(r);
-    assert.equal((r.properties.output as any).total_matches, 0);
-    assert.match((r.properties.output as any).hint, /loosening/);
+    const r = await router.handle(call("search_products", { query: "linen" }));
+    ok(r);
+    assert.ok(out(r).products.length > 0);
+    for (const p of out(r).products) assert.deepEqual(Object.keys(p).sort(), ["brand", "id", "price", "title"]);
   });
 
-  it("trims an oversized search below the threshold", async () => {
-    const huge: Product[] = Array.from({ length: 30 }, (_, i) => ({
-      ...STUB_PRODUCTS[0],
-      id: `big-${String(i).padStart(3, "0")}-${"x".repeat(200)}`,
-      name: "Very ".repeat(200) + "long name",
-      description: "word ".repeat(400) + ".",
-    }));
-    const { router, lines } = setup({}, huge);
+  it("hints when nothing matches", async () => {
+    const { router } = setup();
+    const r = await router.handle(call("search_products", { query: "zzzz" }));
+    ok(r);
+    assert.match(out(r).hint, /loosening/);
+  });
+
+  it("trims an oversized result below the threshold", async () => {
+    const { router, barn, lines } = setup();
+    barn.search = () =>
+      Array.from({ length: 5 }, (_, i) => ({ id: `X-${i}-${"z".repeat(300)}`, title: "Long ".repeat(200), brand: "B".repeat(300), price: 1 }));
     const r = await router.handle(call("search_products", {}));
-    assertWellFormed(r);
+    ok(r);
     assert.ok(byteLength(r) <= 3500);
-    assert.ok(lines.some((l) => l.includes("trimmed")), lines.join("\n"));
+    assert.ok(lines.some((l) => l.includes("trimmed")));
   });
 });
 
 describe("show_product", () => {
-  it("opens the product and returns sizes", async () => {
-    const { router, calls } = setup();
-    const r = await router.handle(call("show_product", { product_id: "jkt-001" }));
-    assertWellFormed(r);
-    assert.deepEqual(calls[0], ["showProduct", ["jkt-001"]]);
-    const out = r.properties.output as any;
-    assert.equal(out.shown, true);
-    assert.equal(out.id, "jkt-001");
-    assert.deepEqual(out.sizes, ["S", "M", "L", "XL"]);
+  it("opens the page and returns in-stock sizes", async () => {
+    const { router, hash } = setup();
+    const r = await router.handle(call("show_product", { product_id: "MW-0332" }));
+    ok(r);
+    assert.equal(hash(), "#/product/MW-0332");
+    assert.equal(out(r).price, 198);
+    assert.ok(!out(r).sizes_in_stock.includes("XL"), "XL has 0 inventory");
   });
 
-  it("returns an error for an unknown id", async () => {
+  it("errors on an unknown id", async () => {
     const { router } = setup();
-    const r = await router.handle(call("show_product", { product_id: "nope-999" }));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
+    ok(await router.handle(call("show_product", { product_id: "nope" })), "error");
   });
 });
 
-describe("add_to_cart", () => {
-  it("adds and returns cart totals", async () => {
+describe("add_to_bag", () => {
+  it("adds and reports the bag and the room left under the limit", async () => {
     const { router, calls } = setup();
-    const r = await router.handle(call("add_to_cart", { product_id: "jkt-001", size: "M" }));
-    assertWellFormed(r);
-    assert.deepEqual(calls[0], ["addToCart", ["jkt-001", "M"]]);
-    assert.deepEqual(r.properties.output, {
-      added: { product_id: "jkt-001", size: "M" },
-      cart_count: 1,
-      cart_total_usd: 240,
-    });
+    const r = await router.handle(call("add_to_bag", { product_id: "MW-0332", size: "M", color: "Navy Heather Herringbone" }));
+    ok(r);
+    assert.deepEqual(calls.find((c) => c[0] === "addToBag"), ["addToBag", ["MW-0332", "M", "Navy Heather Herringbone"]]);
+    assert.equal(out(r).bag_count, 1);
+    assert.equal(out(r).bag_total_usd, 198);
+    assert.equal(out(r).left_under_limit_usd, 10000 - 198);
   });
 
-  it("passes the shop's reason back for a bad size", async () => {
+  it("passes Barn's reason back for a sold-out size", async () => {
     const { router } = setup();
-    const r = await router.handle(call("add_to_cart", { product_id: "jkt-001", size: "XXL" }));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
-    assert.match(String(r.properties.output), /XXL/);
+    const r = await router.handle(call("add_to_bag", { product_id: "MW-0332", size: "XL" }));
+    ok(r, "error");
+    assert.match(String(r.properties.output), /out of stock/);
+  });
+
+  it("refuses an item that would pass the $10,000 limit, without touching the bag", async () => {
+    const { router, calls, setBag } = setup();
+    setBag([{ id: "MW-0333", size: "38S", color: "x", qty: 17 }]); // 17 × 580 = 9860
+    const r = await router.handle(call("add_to_bag", { product_id: "MW-0332", size: "M" }));
+    ok(r, "error");
+    assert.match(String(r.properties.output), /limit/);
+    assert.equal(calls.filter((c) => c[0] === "addToBag").length, 0);
+  });
+
+  it("uses a price seen in an earlier result instead of opening the page", async () => {
+    const { router, calls } = setup();
+    await router.handle(call("show_product", { product_id: "MW-0332" }));
+    const opens = calls.filter((c) => c[0] === "openProduct").length;
+    ok(await router.handle(call("add_to_bag", { product_id: "MW-0332", size: "M" })));
+    assert.equal(calls.filter((c) => c[0] === "openProduct").length, opens);
+  });
+
+  it("uses Barn.getProduct when it exists", async () => {
+    const { router, barn, calls } = setup();
+    barn.getProduct = (id) => ({ id, title: "t", brand: "b", price: 198 });
+    ok(await router.handle(call("add_to_bag", { product_id: "MW-0332", size: "M" })));
+    assert.equal(calls.filter((c) => c[0] === "openProduct").length, 0);
   });
 });
 
 describe("style_outfit", () => {
-  it("sends looks to the outfit board and a compact result to the avatar", async () => {
-    let seen: unknown;
-    const { router, calls } = setup({
-      styleOutfit: async (req) => {
-        seen = req;
-        return mockStyleOutfit(STUB_PRODUCTS, 0)(req);
-      },
-    });
-    const r = await router.handle(
-      call("style_outfit", { occasion: "summer wedding in Italy", budget_usd: 800, response_to_user: "One moment." }),
-    );
-    assertWellFormed(r);
-    assert.deepEqual(seen, { occasion: "summer wedding in Italy", budget_usd: 800, conversation_id: "conv-1" });
-    assert.equal(calls[0][0], "showOutfit");
-    const board = calls[0][1][0] as StylistResponse;
-    assert.equal(board.looks.length, 3);
-    const out = r.properties.output as any;
-    assert.equal(r.properties.status, "success");
-    assert.equal(out.looks.length, 3);
-    assert.ok(out.spoken_summary);
-    for (const look of out.looks) {
-      for (const it of look.items) {
-        assert.ok(it.slot);
-        assert.ok(it.product_id || it.closet_item);
-        assert.equal(it.why, undefined, "why stays on the page, not in the avatar result");
-      }
-    }
-    assert.ok(out.looks.some((l: any) => l.items.some((it: any) => it.closet_item)), "reuses a closet item");
+  it("sends the run request, shows the looks and returns a compact result", async () => {
+    let seen: RunRequest | undefined;
+    const { router, calls } = setup({ styleOutfit: async (req) => ((seen = req), mockStylist(["MW-0332"], 0)(req)) });
+    const r = await router.handle(call("style_outfit", { occasion: "summer wedding in Italy", budget_usd: 800, response_to_user: "On it." }));
+    ok(r);
+    assert.deepEqual(seen, { shopper_id: "demo-shopper", conversation_id: "conv-1", occasion: "summer wedding in Italy", budget_usd: 800 });
+    const shown = calls.find((c) => c[0] === "showLooks")![1][0] as StylistResult;
+    assert.equal(shown.looks.length, 3);
+    assert.equal(out(r).looks.length, 3);
+    for (const look of out(r).looks) for (const it of look.items) assert.equal(it.why, undefined);
   });
 
-  it("passes rework notes through", async () => {
-    let seen: any;
-    const { router } = setup({
-      styleOutfit: async (req) => ((seen = req), mockStyleOutfit(STUB_PRODUCTS, 0)(req)),
-    });
-    await router.handle(call("style_outfit", { occasion: "wedding", notes: "the shoes are too formal" }));
-    assert.equal(seen.notes, "the shoes are too formal");
+  it("sends rework when both rework fields are given", async () => {
+    let seen: RunRequest | undefined;
+    const { router } = setup({ styleOutfit: async (req) => ((seen = req), mockStylist([], 0)(req)) });
+    ok(await router.handle(call("style_outfit", { occasion: "w", budget_usd: 800, rework_slot: "Shoes", rework_feedback: "too formal" })));
+    assert.deepEqual(seen!.rework, { slot: "Shoes", feedback: "too formal" });
+  });
+
+  it("caps the budget at the limit and says so", async () => {
+    let seen: RunRequest | undefined;
+    const { router } = setup({ styleOutfit: async (req) => ((seen = req), mockStylist([], 0)(req)) });
+    const r = await router.handle(call("style_outfit", { occasion: "gala", budget_usd: 50000 }));
+    ok(r);
+    assert.equal(seen!.budget_usd, 10000);
+    assert.match(out(r).budget_note, /capped/);
+  });
+
+  it("requires a budget", async () => {
+    const { router } = setup();
+    const r = await router.handle(call("style_outfit", { occasion: "gala" }));
+    ok(r, "error");
+    assert.match(String(r.properties.output), /budget/);
+  });
+
+  it("refuses a second run while one is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { router } = setup({ styleOutfit: async (req) => (await gate, mockStylist([], 0)(req)) });
+    const first = router.handle(call("style_outfit", { occasion: "w", budget_usd: 800 }));
+    await new Promise((r) => setTimeout(r, 5));
+    const second = await router.handle(call("style_outfit", { occasion: "w", budget_usd: 800 }));
+    ok(second, "error");
+    release();
+    ok(await first);
+  });
+
+  it("returns a speakable error on timeout and on empty looks", async () => {
+    const t = setup({ styleOutfit: () => new Promise(() => {}), styleOutfitTimeoutMs: 20 });
+    ok(await t.router.handle(call("style_outfit", { occasion: "x", budget_usd: 5 })), "error");
+    const e = setup({ styleOutfit: async () => ({ looks: [], spoken_summary: "" }) });
+    ok(await e.router.handle(call("style_outfit", { occasion: "x", budget_usd: 5 })), "error");
   });
 
   it("trims a huge stylist response", async () => {
-    const bigLook = {
-      outfit_name: "Name ".repeat(100),
-      total_usd: 999,
-      items: Array.from({ length: 20 }, (_, i) => ({ product_id: `id-${i}-${"z".repeat(60)}`, slot: "jacket", why: "x" })),
-    };
-    const { router } = setup({
-      styleOutfit: async () => ({ looks: Array(6).fill(bigLook), spoken_summary: "s".repeat(2000), lookbook_artifact: "a" }),
-    });
-    const r = await router.handle(call("style_outfit", { occasion: "x" }));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "success");
+    const big = { outfit_name: "N".repeat(400), total_usd: 1, items: Array.from({ length: 30 }, (_, i) => ({ product_id: `id-${i}-${"z".repeat(80)}`, slot: "Shoes", why: "x" })) };
+    const { router } = setup({ styleOutfit: async () => ({ looks: Array(6).fill(big), spoken_summary: "s".repeat(3000) }) });
+    const r = await router.handle(call("style_outfit", { occasion: "x", budget_usd: 5 }));
+    ok(r);
     assert.ok(byteLength(r) <= 3500);
-  });
-
-  it("returns an error for an empty response", async () => {
-    const { router } = setup({ styleOutfit: async () => ({ looks: [], spoken_summary: "" }) });
-    const r = await router.handle(call("style_outfit", { occasion: "x" }));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
-  });
-
-  it("returns a speakable error on timeout", async () => {
-    const { router } = setup({
-      styleOutfit: () => new Promise(() => {}),
-      styleOutfitTimeoutMs: 30,
-    });
-    const r = await router.handle(call("style_outfit", { occasion: "x" }));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
-    assert.match(String(r.properties.output), /couldn't finish/);
   });
 
   it("background mode replies at once and pushes the looks later", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const pushed: RespondMessage[] = [];
-    const { router, calls } = setup({
-      styleOutfitMode: "background",
-      styleOutfit: async (req) => {
-        await gate;
-        return mockStyleOutfit(STUB_PRODUCTS, 0)(req);
-      },
-    });
-    const r = await router.handle(call("style_outfit", { occasion: "wedding" }), (m) => pushed.push(m));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "success");
-    assert.match(String(r.properties.output), /started/);
+    const { router, calls } = setup({ styleOutfitMode: "background", styleOutfit: async (req) => (await gate, mockStylist([], 0)(req)) });
+    const r = await router.handle(call("style_outfit", { occasion: "w", budget_usd: 800 }), (m) => pushed.push(m));
+    ok(r);
+    assert.equal(out(r).started, true);
     assert.equal(pushed.length, 0);
     release();
     await new Promise((r) => setTimeout(r, 20));
     assert.equal(pushed.length, 1);
     assert.equal(pushed[0].event_type, "conversation.respond");
-    assert.equal(pushed[0].conversation_id, "conv-1");
     assert.ok(byteLength(pushed[0]) < MAX_APP_MESSAGE_BYTES);
-    assert.equal(calls[0][0], "showOutfit");
+    assert.ok(calls.some((c) => c[0] === "showLooks"));
   });
 });
 
 describe("errors never throw", () => {
-  it("bad args", async () => {
-    const { router, calls } = setup();
-    const r = await router.handle(call("show_product", {}));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
-    assert.equal(calls.length, 0);
-  });
-
-  it("non-number price", async () => {
+  it("bad args, malformed JSON, unknown tool, missing Barn, throwing Barn", async () => {
     const { router } = setup();
-    const r = await router.handle(call("search_products", { max_price: "cheap" }));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
-  });
-
-  it("malformed JSON arguments", async () => {
-    const { router } = setup();
-    const r = await router.handle(call("search_products", "{not json"));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
-  });
-
-  it("unknown tool", async () => {
-    const { router } = setup();
-    const r = await router.handle(call("checkout", {}));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
-    assert.match(String(r.properties.output), /Unknown tool/);
-  });
-
-  it("missing bridge", async () => {
-    const router = createRouter({ bridge: () => undefined, styleOutfit: mockStyleOutfit([], 0), logger: () => {} });
-    const r = await router.handle(call("search_products", {}));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
-  });
-
-  it("bridge that throws", async () => {
-    const bridge = { searchProducts: () => { throw new Error("boom"); } } as unknown as ShopBridge;
-    const router = createRouter({ bridge, styleOutfit: mockStyleOutfit([], 0), logger: () => {} });
-    const r = await router.handle(call("search_products", {}));
-    assertWellFormed(r);
-    assert.equal(r.properties.status, "error");
+    ok(await router.handle(call("show_product", {})), "error");
+    ok(await router.handle(call("search_products", { max_price: "cheap" })), "error");
+    ok(await router.handle(call("search_products", "{not json")), "error");
+    const u = await router.handle(call("checkout", {}));
+    ok(u, "error");
+    assert.match(String(u.properties.output), /Unknown tool/);
+    const none = createRouter({ bridge: () => undefined, styleOutfit: mockStylist([], 0), logger: () => {} });
+    ok(await none.handle(call("search_products", {})), "error");
+    const boom = createRouter({
+      bridge: { search: () => { throw new Error("boom"); } } as unknown as Barn,
+      styleOutfit: mockStylist([], 0),
+      logger: () => {},
+    });
+    ok(await boom.handle(call("search_products", {})), "error");
   });
 
   it("ignores non-tool messages and duplicates", async () => {
@@ -300,24 +308,89 @@ describe("errors never throw", () => {
   });
 });
 
-describe("tools.json", () => {
-  it("matches the team plan's on_call / on_resolve table", async () => {
-    const { readFileSync } = await import("node:fs");
-    const tools = JSON.parse(readFileSync(new URL("../tools.json", import.meta.url), "utf8"));
-    const want: Record<string, [string, string]> = {
-      search_products: ["silent", "generate_response"],
-      show_product: ["silent", "generate_response"],
-      add_to_cart: ["silent", "generate_response"],
-      style_outfit: ["generate_filler", "generate_response"],
-    };
-    assert.deepEqual(tools.map((t: any) => t.name).sort(), Object.keys(want).sort());
-    for (const t of tools) {
-      assert.deepEqual([t.on_call, t.on_resolve], want[t.name], t.name);
-      assert.deepEqual(t.delivery, { app_message: true });
-    }
+describe("stylist client (Jing's backend)", () => {
+  const sse = (events: unknown[], chunk = 7) => {
+    const text = ": ping\n\n" + events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+    const bytes = new TextEncoder().encode(text);
+    return new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < bytes.length; i += chunk) c.enqueue(bytes.slice(i, i + chunk));
+        c.close();
+      },
+    });
+  };
+  const result = { type: "result", looks: [{ outfit_name: "A", items: [{ product_id: "MW-0332", slot: "Sport Coat", why: "w" }], total_usd: 198 }], spoken_summary: "s", lookbook_artifact: null, elapsed_ms: 1, warnings: ["stub data"] };
+
+  function fakeFetch(events: unknown[], runStatus = 202) {
+    const requests: Array<{ url: string; body?: string }> = [];
+    const f = (async (url: string, init?: RequestInit) => {
+      requests.push({ url, body: init?.body as string | undefined });
+      if (url.endsWith("/api/stylist/run")) return new Response(JSON.stringify({ run_id: "r1" }), { status: runStatus });
+      return new Response(sse(events), { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    return { f, requests };
+  }
+
+  it("posts the run, streams steps to onStep and resolves with the result", async () => {
+    const { f, requests } = fakeFetch([
+      { type: "step", id: "memory", label: "Recalling", status: "start" },
+      { type: "step", id: "memory", label: "Recalling", status: "end" },
+      result,
+    ]);
+    const steps: unknown[] = [];
+    let started = 0;
+    const run = stylistClient({ baseUrl: "http://x/", fetchImpl: f, onStep: (s) => steps.push(s), onStart: () => started++ });
+    const r = await run({ shopper_id: "s", conversation_id: "c", occasion: "o", budget_usd: 800 });
+    assert.equal(requests[0].url, "http://x/api/stylist/run");
+    assert.deepEqual(JSON.parse(requests[0].body!), { shopper_id: "s", conversation_id: "c", occasion: "o", budget_usd: 800 });
+    assert.equal(requests[1].url, "http://x/api/stylist/events?run_id=r1");
+    assert.equal(started, 1);
+    assert.equal(steps.length, 2);
+    assert.deepEqual(r, { looks: result.looks, spoken_summary: "s", lookbook_artifact: null });
+  });
+
+  it("rejects on an error event, a bad status, or a stream without a result", async () => {
+    const opts = { shopper_id: "s", conversation_id: "c", occasion: "o", budget_usd: 1 };
+    await assert.rejects(stylistClient({ baseUrl: "http://x", fetchImpl: fakeFetch([{ type: "error", message: "nope" }]).f })(opts), /nope/);
+    await assert.rejects(stylistClient({ baseUrl: "http://x", fetchImpl: fakeFetch([], 400).f })(opts), /400/);
+    await assert.rejects(stylistClient({ baseUrl: "http://x", fetchImpl: fakeFetch([]).f })(opts), /without a result/);
+  });
+
+  it("readSse handles CRLF and multi-line data", async () => {
+    const body = new Response('data: {"type":"step",\r\ndata: "id":"a","label":"l","status":"start"}\r\n\r\n').body!;
+    const got = [];
+    for await (const e of readSse(body)) got.push(e);
+    assert.deepEqual(got, [{ type: "step", id: "a", label: "l", status: "start" }]);
   });
 });
 
-// Keep the StyleOutfitFn import used for type-checking the mock signature.
-const _typecheck: StyleOutfitFn = mockStyleOutfit(STUB_PRODUCTS, 0);
-void _typecheck;
+describe("parseBudget", () => {
+  it("reads typed budgets", () => {
+    assert.equal(parseBudget("summer wedding in Italy, about $800"), 800);
+    assert.equal(parseBudget("gala, $1,200.50"), 1200.5);
+    assert.equal(parseBudget("trip for 2k"), 2000);
+    assert.equal(parseBudget("3 grand for a suit"), 3000);
+    assert.equal(parseBudget("500 bucks"), 500);
+    assert.equal(parseBudget("wedding in June"), undefined);
+  });
+});
+
+describe("tools.json", () => {
+  it("matches Sasha's prompt: names, on_call/on_resolve, required args", () => {
+    const tools = JSON.parse(readFileSync(new URL("../tools.json", import.meta.url), "utf8"));
+    const want: Record<string, [string, string, string[]]> = {
+      search_products: ["silent", "generate_response", []],
+      show_product: ["silent", "generate_response", ["product_id"]],
+      add_to_bag: ["silent", "generate_response", ["product_id"]],
+      style_outfit: ["generate_filler", "generate_response", ["occasion", "budget_usd"]],
+    };
+    assert.deepEqual(tools.map((t: any) => t.name).sort(), Object.keys(want).sort());
+    const prompt = readFileSync(new URL("../../pal/system-prompt.md", import.meta.url), "utf8");
+    for (const t of tools) {
+      const [onCall, onResolve, required] = want[t.name];
+      assert.deepEqual([t.on_call, t.on_resolve, t.parameters.required], [onCall, onResolve, required], t.name);
+      assert.deepEqual(t.delivery, { app_message: true });
+      assert.ok(prompt.includes(t.name), `pal/system-prompt.md never mentions ${t.name}`);
+    }
+  });
+});

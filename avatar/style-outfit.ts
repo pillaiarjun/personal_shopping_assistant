@@ -1,69 +1,130 @@
-// Client for Jing's style-outfit route, plus a mock that needs no backend.
+// Client for Jing's stylist backend:
+//   POST {base}/api/stylist/run            -> 202 { run_id }
+//   GET  {base}/api/stylist/events?run_id= -> SSE, JSON in `data:`; ends after a result or error event
+// Reads the stream with fetch instead of EventSource: EventSource reconnects on close and the
+// server would replay the whole run.
 
-import type { Product } from "../contracts/product";
-import type { Look, StyleOutfitRequest, StylistResponse } from "../contracts/stylist";
+import type { RunRequest, StepStatus, StylistEvent, StylistResult } from "./types";
 
-export type StyleOutfitFn = (req: StyleOutfitRequest) => Promise<StylistResponse>;
+export type StyleOutfitFn = (req: RunRequest) => Promise<StylistResult>;
 
-export const DEFAULT_STYLE_OUTFIT_URL = "/api/style-outfit";
-export const DEFAULT_STYLE_OUTFIT_TIMEOUT_MS = 90_000; // plan target is < 60 s per styling run
+export const DEFAULT_STYLE_OUTFIT_TIMEOUT_MS = 120_000; // Jing's runs take ~35 s; the PAL prompt says "a minute or more"
 
-/** POSTs the request to the backend route and returns its StylistResponse. */
-export function httpStyleOutfit(
-  url: string = DEFAULT_STYLE_OUTFIT_URL,
-  timeoutMs: number = DEFAULT_STYLE_OUTFIT_TIMEOUT_MS,
-): StyleOutfitFn {
+export interface StylistClientOptions {
+  /** Backend origin, e.g. "http://localhost:8787" or the Railway URL. No trailing slash needed. */
+  baseUrl: string;
+  /** Each step event, for the activity feed (Barn.addFeedStep). */
+  onStep?: (step: { id: string; label: string; status: StepStatus }) => void;
+  /** Called once when a run starts, e.g. Barn.resetFeed. */
+  onStart?: () => void;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}
+
+export function stylistClient(opts: StylistClientOptions): StyleOutfitFn {
+  const base = opts.baseUrl.replace(/\/+$/, "");
+  const f = opts.fetchImpl ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_STYLE_OUTFIT_TIMEOUT_MS;
+
   return async (req) => {
-    const res = await fetch(url, {
+    const signal = AbortSignal.timeout(timeoutMs);
+    const start = await f(`${base}/api/stylist/run`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(req),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     });
-    if (!res.ok) throw new Error(`style-outfit ${res.status}: ${(await res.text()).slice(0, 200)}`);
-    return (await res.json()) as StylistResponse;
+    if (!start.ok) throw new Error(`stylist run ${start.status}: ${(await start.text()).slice(0, 300)}`);
+    const { run_id } = (await start.json()) as { run_id: string };
+    if (!run_id) throw new Error("stylist run returned no run_id");
+    opts.onStart?.();
+
+    const res = await f(`${base}/api/stylist/events?run_id=${encodeURIComponent(run_id)}`, {
+      headers: { accept: "text/event-stream" },
+      signal,
+    });
+    if (!res.ok || !res.body) throw new Error(`stylist events ${res.status}`);
+
+    for await (const ev of readSse(res.body)) {
+      if (ev.type === "step") opts.onStep?.({ id: ev.id, label: ev.label, status: ev.status });
+      else if (ev.type === "error") throw new Error(`stylist: ${ev.message}`);
+      else if (ev.type === "result") {
+        const { looks, spoken_summary, lookbook_artifact } = ev;
+        return { looks, spoken_summary, lookbook_artifact };
+      }
+    }
+    throw new Error("stylist stream ended without a result");
   };
 }
 
-const SLOTS =["jacket", "shirt", "trousers", "shoes"] as const;
-
-/** Demo closet, standing in for Jing's shopper memory. */
-const MOCK_CLOSET: Partial<Record<(typeof SLOTS)[number], string>> = { trousers: "Navy chinos", shoes: "Brown suede loafers" };
-
-/**
- * Fake stylist: three looks, one catalog item per slot (n-th cheapest for look n), reusing a
- * closet piece when the budget runs out. Good enough to exercise the outfit board and the
- * router without the ZooWork backend.
- */
-export function mockStyleOutfit(products: Product[], delayMs = 1500): StyleOutfitFn {
-  return async ({ occasion, budget_usd, notes }) => {
-    await new Promise((r) => setTimeout(r, delayMs));
-    const bySlot = new Map<string, Product[]>();
-    for (const p of [...products].sort((a, b) => a.price_usd - b.price_usd)) {
-      const slot = p.category.toLowerCase();
-      if ((SLOTS as readonly string[]).includes(slot)) bySlot.set(slot, [...(bySlot.get(slot) ?? []), p]);
-    }
-    const looks: Look[] = [0, 1, 2].map((n) => {
-      const items: Look["items"] = [];
-      let total = 0;
-      for (const slot of SLOTS) {
-        const options = bySlot.get(slot) ?? [];
-        const p = options[Math.min(n, options.length - 1)];
-        const owned = MOCK_CLOSET[slot];
-        const overBudget = p && budget_usd != null && total + p.price_usd > budget_usd / 3;
-        if (owned && (!p || overBudget || n === 0)) {
-          items.push({ closet_item: owned, slot, why: "Already owned, so the budget goes further." });
-        } else if (p) {
-          items.push({ product_id: p.id, slot, why: `${p.name} suits ${occasion}.` });
-          total += p.price_usd;
+/** Minimal SSE reader: yields the JSON of each `data:` event; ignores comments (pings). */
+export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<StylistEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (value) buf += decoder.decode(value, { stream: true });
+      let cut: number;
+      while ((cut = buf.search(/\r?\n\r?\n/)) !== -1) {
+        const block = buf.slice(0, cut);
+        buf = buf.slice(cut).replace(/^\r?\n\r?\n/, "");
+        const data = block
+          .split(/\r?\n/)
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).replace(/^ /, ""))
+          .join("\n");
+        if (data) {
+          try {
+            yield JSON.parse(data) as StylistEvent;
+          } catch {
+            // skip malformed event
+          }
         }
       }
-      return { outfit_name: `${["Classic", "Relaxed", "Sharp"][n]} ${occasion}`, items, total_usd: Math.round(total * 100) / 100 };
-    });
+      if (done) return;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** Fake backend for the harness and tests: a few steps, then three looks over the given ids. */
+export function mockStylist(productIds: string[], delayMs = 300, onStep?: StylistClientOptions["onStep"]): StyleOutfitFn {
+  const wait = () => new Promise((r) => setTimeout(r, delayMs));
+  return async (req) => {
+    for (const [id, label] of [
+      ["memory", "Recalling your sizes and closet"],
+      ["search", "Searching the catalog"],
+      ["build", "Building three looks"],
+    ]) {
+      onStep?.({ id, label, status: "start" });
+      await wait();
+      onStep?.({ id, label, status: "end" });
+    }
+    const ids = productIds.length ? productIds : ["MW-0001"];
+    const looks = [0, 1, 2].map((n) => ({
+      outfit_name: `${["Classic", "Relaxed", "Sharp"][n]} ${req.occasion}`,
+      items: [
+        { product_id: ids[n % ids.length], slot: "Sport Coat", why: "Light enough for the heat." },
+        { closet_item: "Navy chinos", slot: "Chinos", why: "Already owned, so the budget goes further." },
+      ],
+      total_usd: Math.min(req.budget_usd, 300 + n * 100),
+    }));
     return {
       looks,
-      spoken_summary: `I built three looks for ${occasion}${notes ? `, taking "${notes}" into account` : ""}. The first reuses pieces you already own.`,
-      lookbook_artifact: "mock-lookbook",
+      spoken_summary: `Three looks for ${req.occasion}${req.rework ? `, with new ${req.rework.slot.toLowerCase()}` : ""}, all under ${req.budget_usd} dollars.`,
+      lookbook_artifact: null,
     };
   };
+}
+
+/** Pulls a budget out of a typed brief: "$800", "about 800 bucks", "2k", "3 grand". */
+export function parseBudget(text: string): number | undefined {
+  const m = text.match(/\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k)?|(\d[\d,]*(?:\.\d+)?)\s*(k|grand|bucks|dollars|usd)\b/i);
+  if (!m) return undefined;
+  const n = Number((m[1] ?? m[3]).replace(/,/g, ""));
+  const k = /^(k|grand)$/i.test(m[2] ?? m[4] ?? "");
+  return Number.isFinite(n) ? n * (k ? 1000 : 1) : undefined;
 }

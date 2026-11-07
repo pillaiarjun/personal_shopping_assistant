@@ -1,21 +1,18 @@
-// Tool router: turns a Tavus `conversation.tool_call` app message into a ShopBridge call
-// and builds the `conversation.tool_result` app message to send back.
-// No React and no Daily/Tavus SDK imports, so it runs in node tests as-is.
+// Tool router: turns a Tavus `conversation.tool_call` app message into a window.Barn call
+// (site/barn.js) and builds the `conversation.tool_result` app message to send back.
+// No DOM or Daily imports, so it runs in node tests as-is.
 
-import type { Product } from "../contracts/product";
-import type { AddToCartResult, SearchFilters, ShopBridge } from "../contracts/shop-bridge";
-import type { StyleOutfitRequest, StylistResponse } from "../contracts/stylist";
+import type { Barn, BarnSearchFilters, RunRequest, StylistResult } from "./types";
 import type { StyleOutfitFn } from "./style-outfit";
-import { DEFAULT_STYLE_OUTFIT_TIMEOUT_MS } from "./style-outfit";
 
 /** Tavus drops app messages over 4 KB silently, so results are trimmed below this. */
 export const MAX_APP_MESSAGE_BYTES = 4096;
 export const TRIM_THRESHOLD_BYTES = 3500;
-export const MAX_SEARCH_RESULTS = 5;
-const LINE_CHARS = 80;
+/** Hard cap per conversation across the bag and every style_outfit budget (Sasha's prompt). */
+export const DEFAULT_SPEND_LIMIT_USD = 10_000;
 const SHORT_NAME_CHARS = 40;
 
-// ---- Tavus message shapes (docs.tavus.io: tool-calling examples, conversation.tool_result schema) ----
+// ---- Tavus message shapes ----
 
 export interface ToolCallMessage {
   message_type: "conversation";
@@ -43,6 +40,14 @@ export interface ToolResultMessage {
   };
 }
 
+/** Tavus "respond" interaction: the PAL replies to `text` as if it were a user turn. UNVERIFIED name. */
+export interface RespondMessage {
+  message_type: "conversation";
+  event_type: "conversation.respond";
+  conversation_id: string;
+  properties: { text: string };
+}
+
 export type RouterLogEntry =
   | { dir: "in"; tool: string; tool_call_id: string; args: unknown }
   | {
@@ -58,9 +63,13 @@ export type RouterLogEntry =
   | { dir: "info"; text: string };
 
 export interface RouterOptions {
-  /** The page's bridge, or a getter (e.g. () => window.shop) so it can register late. */
-  bridge: ShopBridge | (() => ShopBridge | undefined);
+  /** window.Barn, or a getter (e.g. () => window.Barn) so it can load late. */
+  bridge: Barn | (() => Barn | undefined);
   styleOutfit: StyleOutfitFn;
+  /** Sent to the stylist as shopper_id (memory key). Default "demo-shopper" (pal/demo-shopper.json). */
+  shopperId?: string;
+  spendLimitUsd?: number;
+  /** Safety net on top of the client's own timeout. */
   styleOutfitTimeoutMs?: number;
   /**
    * "await" (default): the tool_result waits for the styling run.
@@ -69,7 +78,6 @@ export interface RouterOptions {
    */
   styleOutfitMode?: "await" | "background";
   trimThresholdBytes?: number;
-  /** Structured log for the debug panel. */
   onLog?: (entry: RouterLogEntry) => void;
   /** Plain-text log; defaults to console.log. */
   logger?: (line: string) => void;
@@ -92,29 +100,29 @@ export function byteLength(value: unknown): number {
 
 // ---- argument validation ----
 
-type ArgSpec = Record<string, { type: "string" | "number"; required?: boolean }>;
-type Validated = { ok: true; args: Record<string, string | number> } | { ok: false; error: string };
+type ArgSpec = Record<string, { type: "string" | "number" | "boolean"; required?: boolean }>;
+type Args = Record<string, string | number | boolean>;
+type Validated = { ok: true; args: Args } | { ok: false; error: string };
 
 function validate(raw: unknown, spec: ArgSpec): Validated {
   const input = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const args: Record<string, string | number> = {};
+  const args: Args = {};
   for (const [key, { type, required }] of Object.entries(spec)) {
     let v = input[key];
     if (v === "" || v === null) v = undefined;
+    const label = key.replace(/_/g, " ");
     if (v === undefined) {
-      if (required) return { ok: false, error: `I need a ${key.replace(/_/g, " ")} to do that.` };
+      if (required) return { ok: false, error: `I need the ${label} to do that. Ask the shopper for it.` };
       continue;
     }
     if (type === "number") {
       const n = typeof v === "string" ? Number(v.replace(/[$,\s]/g, "")) : v;
-      if (typeof n !== "number" || !Number.isFinite(n) || n < 0) {
-        return { ok: false, error: `${key.replace(/_/g, " ")} should be a number.` };
-      }
+      if (typeof n !== "number" || !Number.isFinite(n) || n < 0) return { ok: false, error: `${label} should be a number.` };
       args[key] = n;
+    } else if (type === "boolean") {
+      args[key] = v === true || v === "true" || v === 1 || v === "yes";
     } else {
-      if (typeof v !== "string" && typeof v !== "number") {
-        return { ok: false, error: `${key.replace(/_/g, " ")} should be text.` };
-      }
+      if (typeof v !== "string" && typeof v !== "number") return { ok: false, error: `${label} should be text.` };
       args[key] = String(v).trim();
     }
   }
@@ -128,31 +136,21 @@ function parseArguments(raw: ToolCallMessage["properties"]["arguments"]): unknow
   return JSON.parse(raw);
 }
 
-// ---- compact shapes sent to the avatar ----
-
 function clip(s: string, n: number): string {
   return s.length <= n ? s : s.slice(0, n - 1).trimEnd() + "…";
 }
 
-interface CompactProduct {
-  id: string;
-  name: string;
-  price_usd: number;
-  line?: string;
-}
-
-function compact(p: Product): CompactProduct {
-  const firstSentence = (p.description ?? "").split(/(?<=[.!?])\s/)[0] ?? "";
-  return { id: p.id, name: p.name, price_usd: p.price_usd, line: clip(firstSentence, LINE_CHARS) || undefined };
-}
+const usd = (n: number) => Math.round(n * 100) / 100;
 
 // ---- handlers ----
+
+type Trim = { label: string; apply: (o: any) => any };
 
 type HandlerResult = {
   status: "success" | "error";
   output: string | Record<string, unknown>;
   /** Successive trims to apply while the message is too big. Each returns a smaller output. */
-  trims?: Array<{ label: string; apply: (o: any) => any }>;
+  trims?: Trim[];
 };
 
 interface HandlerContext {
@@ -161,126 +159,172 @@ interface HandlerContext {
   send?: (msg: RespondMessage) => void;
 }
 
-type Handler = (args: Record<string, unknown>, bridge: ShopBridge, ctx: HandlerContext) => Promise<HandlerResult>;
+type Handler = (args: Record<string, unknown>, barn: Barn, ctx: HandlerContext) => Promise<HandlerResult>;
 
 const err = (output: string): HandlerResult => ({ status: "error", output });
 
-function listTrims(listKey: string, minKeep = 1) {
-  const trims: NonNullable<HandlerResult["trims"]> = [
-    {
-      label: "drop lines",
-      apply: (o) => ({ ...o, [listKey]: o[listKey].map(({ line, ...rest }: any) => rest) }),
-    },
-    {
-      label: "short names",
-      apply: (o) => ({
-        ...o,
-        [listKey]: o[listKey].map((p: any) => (p.name ? { ...p, name: clip(p.name, SHORT_NAME_CHARS) } : p)),
-      }),
-    },
-  ];
-  for (let i = 0; i < 20; i++) {
-    trims.push({
-      label: "cut list",
-      apply: (o) => (o[listKey].length > minKeep ? { ...o, [listKey]: o[listKey].slice(0, -1) } : o),
-    });
-  }
-  return trims;
+function cutList(key: string, minKeep = 1, times = 10): Trim[] {
+  return Array.from({ length: times }, () => ({
+    label: `cut ${key}`,
+    apply: (o: any) => (o[key].length > minKeep ? { ...o, [key]: o[key].slice(0, -1) } : o),
+  }));
 }
 
-function makeHandlers(opts: RouterOptions): Record<string, Handler> {
-  const styleTimeout = opts.styleOutfitTimeoutMs ?? DEFAULT_STYLE_OUTFIT_TIMEOUT_MS;
+function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<string, Handler> {
+  const styleTimeout = opts.styleOutfitTimeoutMs ?? 150_000;
   const styleMode = opts.styleOutfitMode ?? "await";
+  const limit = opts.spendLimitUsd ?? DEFAULT_SPEND_LIMIT_USD;
+  const shopperId = opts.shopperId ?? "demo-shopper";
   const log = opts.logger ?? ((line: string) => console.log(line));
   const threshold = opts.trimThresholdBytes ?? TRIM_THRESHOLD_BYTES;
+  let styleRunning = false;
 
   return {
-    async search_products(raw, bridge) {
+    async search_products(raw, barn) {
       const v = validate(raw, {
         query: { type: "string" },
-        category: { type: "string" },
-        max_price: { type: "number" },
+        department: { type: "string" },
+        style: { type: "string" },
+        brand: { type: "string" },
         color: { type: "string" },
+        max_price: { type: "number" },
+        on_sale: { type: "boolean" },
       });
       if (!v.ok) return err(v.error);
-      const results = (await bridge.searchProducts(v.args as SearchFilters)) ?? [];
-      const products = results.slice(0, MAX_SEARCH_RESULTS).map(compact);
+      const a = v.args;
+      const filters: BarnSearchFilters = {};
+      if (a.query) filters.q = a.query as string;
+      if (a.department) filters.dept = a.department as string;
+      if (a.style) filters.style = a.style as string;
+      if (a.brand) filters.brand = a.brand as string;
+      if (a.color) filters.color = a.color as string;
+      if (a.max_price !== undefined) filters.max_price = a.max_price as number;
+      if (a.on_sale) filters.sale = true;
+      const results = (await barn.search(filters)) ?? [];
+      for (const p of results) prices.set(p.id, p.price);
       return {
         status: "success",
         output: {
-          total_matches: results.length,
-          products,
-          ...(results.length === 0 ? { hint: "No matches. Suggest loosening a filter." } : {}),
+          products: results.map((p) => ({ id: p.id, title: p.title, brand: p.brand, price: p.price })),
+          ...(results.length === 0 ? { hint: "No matches. Suggest loosening one filter." } : {}),
         },
-        trims: listTrims("products"),
-      };
-    },
-
-    async show_product(raw, bridge) {
-      const v = validate(raw, { product_id: { type: "string", required: true } });
-      if (!v.ok) return err(v.error);
-      const p = await bridge.showProduct(v.args.product_id as string);
-      if (!p) return err(`I couldn't find product ${v.args.product_id}. Search again to get a valid id.`);
-      return {
-        status: "success",
-        output: { shown: true, ...compact(p), sizes: p.sizes, colors: p.colors },
         trims: [
-          { label: "drop line", apply: ({ line, ...rest }) => rest },
-          { label: "short name", apply: (o) => ({ ...o, name: clip(o.name, SHORT_NAME_CHARS) }) },
-          { label: "cut colors/sizes", apply: (o) => ({ ...o, colors: o.colors.slice(0, 3), sizes: o.sizes.slice(0, 8) }) },
+          {
+            label: "short titles",
+            apply: (o) => ({ ...o, products: o.products.map((p: any) => ({ ...p, title: clip(p.title, SHORT_NAME_CHARS) })) }),
+          },
+          { label: "drop brands", apply: (o) => ({ ...o, products: o.products.map(({ brand, ...p }: any) => p) }) },
+          ...cutList("products"),
         ],
       };
     },
 
-    async add_to_cart(raw, bridge) {
+    async show_product(raw, barn) {
+      const v = validate(raw, { product_id: { type: "string", required: true } });
+      if (!v.ok) return err(v.error);
+      const r = await barn.openProduct(v.args.product_id as string);
+      if (!r.ok) return err(`${r.error}. Use an id exactly as a tool returned it, or search again.`);
+      prices.set(r.id, r.price);
+      return {
+        status: "success",
+        output: { shown: true, id: r.id, title: r.title, brand: r.brand, price: r.price, sizes_in_stock: r.sizes, colors: r.colors },
+        trims: [
+          { label: "short title", apply: (o) => ({ ...o, title: clip(o.title, SHORT_NAME_CHARS) }) },
+          {
+            label: "cut colors/sizes",
+            apply: (o) => ({ ...o, colors: o.colors.slice(0, 6), sizes_in_stock: o.sizes_in_stock.slice(0, 12) }),
+          },
+        ],
+      };
+    },
+
+    async add_to_bag(raw, barn) {
       const v = validate(raw, {
         product_id: { type: "string", required: true },
-        size: { type: "string", required: true },
+        size: { type: "string" },
+        color: { type: "string" },
       });
       if (!v.ok) return err(v.error);
-      const r: AddToCartResult = await bridge.addToCart(v.args.product_id as string, v.args.size as string);
-      if (!r.ok) return err(clip(r.reason || "That couldn't be added to the cart.", 200));
+      const id = v.args.product_id as string;
+
+      // Spend guardrail. Learn the price without navigating if Barn allows it; otherwise open the
+      // product page (the shopper is usually on it already when they say yes).
+      let price = barn.getProduct?.(id)?.price ?? prices.get(id);
+      if (price === undefined) {
+        const r = await barn.openProduct(id);
+        if (!r.ok) return err(`${r.error}. Use an id exactly as a tool returned it.`);
+        price = r.price;
+        prices.set(id, price);
+      }
+      const before = await barn.getBag();
+      if (before.total + price > limit) {
+        return err(
+          `Not added: that would take the bag to ${usd(before.total + price)} dollars, past the ${limit} dollar limit for this conversation. The bag is at ${usd(before.total)} dollars.`,
+        );
+      }
+
+      const r = await barn.addToBag(id, v.args.size as string | undefined, v.args.color as string | undefined);
+      if (!r.ok) return err(clip(r.error || "That couldn't be added to the bag.", 200));
+      const bag = await barn.getBag();
       return {
         status: "success",
         output: {
-          added: { product_id: v.args.product_id, size: v.args.size },
-          cart_count: r.cart_count,
-          cart_total_usd: r.cart_total_usd,
+          added: { product_id: id, ...(v.args.size ? { size: v.args.size } : {}), ...(v.args.color ? { color: v.args.color } : {}) },
+          bag_count: bag.count,
+          bag_total_usd: usd(bag.total),
+          left_under_limit_usd: usd(limit - bag.total),
         },
       };
     },
 
-    async style_outfit(raw, bridge, ctx) {
+    async style_outfit(raw, barn, ctx) {
       const v = validate(raw, {
         occasion: { type: "string", required: true },
-        budget_usd: { type: "number" },
+        budget_usd: { type: "number", required: true },
         notes: { type: "string" },
+        rework_slot: { type: "string" },
+        rework_feedback: { type: "string" },
       });
       if (!v.ok) return err(v.error);
-      const req: StyleOutfitRequest = {
-        ...(v.args as Omit<StyleOutfitRequest, "conversation_id">),
-        ...(ctx.conversationId ? { conversation_id: ctx.conversationId } : {}),
+      if (styleRunning) {
+        return err("Looks are still being built. Don't call style_outfit again; tell the shopper it's still cooking.");
+      }
+      const a = v.args;
+      const asked = a.budget_usd as number;
+      if (!(asked > 0)) return err("The budget has to be more than zero. Ask the shopper what they want to spend.");
+      const capped = Math.min(asked, limit);
+      const req: RunRequest = {
+        shopper_id: shopperId,
+        conversation_id: ctx.conversationId || "no-conversation",
+        occasion: a.occasion as string,
+        budget_usd: capped,
+        ...(a.notes ? { notes: a.notes as string } : {}),
+        ...(a.rework_slot && a.rework_feedback
+          ? { rework: { slot: a.rework_slot as string, feedback: a.rework_feedback as string } }
+          : {}),
       };
+      const capNote = capped < asked ? { budget_note: `Budget capped at ${limit} dollars, the per-conversation limit.` } : {};
 
       const run = async (): Promise<HandlerResult> => {
-        let res: StylistResponse;
+        styleRunning = true;
+        let res: StylistResult;
         try {
           res = await withTimeout(opts.styleOutfit(req), styleTimeout);
         } catch (e) {
           opts.onLog?.({ dir: "info", text: `style_outfit backend failed: ${(e as Error).message}` });
-          return err(
-            "The stylist couldn't finish those looks right now. Apologise briefly and offer to build it piece by piece with search instead.",
-          );
+          return err("The stylist couldn't finish those looks. Say so plainly and offer to try again.");
+        } finally {
+          styleRunning = false;
         }
         if (!res || !Array.isArray(res.looks) || res.looks.length === 0) {
-          return err("The stylist sent back no looks. Offer to try again.");
+          return err("The stylist came back with no looks. Say so plainly and offer to try again.");
         }
         try {
-          await bridge.showOutfit(res);
+          await barn.showLooks(res);
         } catch (e) {
-          opts.onLog?.({ dir: "info", text: `showOutfit threw: ${(e as Error).message}` });
+          opts.onLog?.({ dir: "info", text: `Barn.showLooks threw: ${(e as Error).message}` });
         }
-        return { status: "success", output: compactStylist(res), trims: stylistTrims };
+        return { status: "success", output: { ...compactStylist(res), ...capNote }, trims: stylistTrims };
       };
 
       if (styleMode === "await" || !ctx.send) {
@@ -294,10 +338,9 @@ function makeHandlers(opts: RouterOptions): Record<string, Handler> {
       void run().then((r) => {
         const text =
           r.status === "success"
-            ? `[Stylist result, not said by the shopper] The looks are now on the outfit board: ${JSON.stringify(r.output)}. Tell the shopper about them using spoken_summary.`
+            ? `[Stylist result, not said by the shopper] The looks are on the outfit board now: ${JSON.stringify(r.output)}. Say spoken_summary in your own voice and ask which look the shopper likes.`
             : `[Stylist result, not said by the shopper] ${r.output}`;
         const msg = fitRespond(ctx.conversationId, text, threshold);
-        log(`[tool] style_outfit background result ${byteLength(msg)}B`);
         opts.onLog?.({ dir: "info", text: `style_outfit pushed ${r.status} via conversation.respond (${byteLength(msg)}B)` });
         try {
           send(msg);
@@ -307,7 +350,11 @@ function makeHandlers(opts: RouterOptions): Record<string, Handler> {
       });
       return {
         status: "success",
-        output: "The stylist has started building three looks; this takes up to a minute. Keep chatting and do not call style_outfit again. The looks will arrive as a new message.",
+        output: {
+          started: true,
+          ...capNote,
+          note: "The stylist is building three looks; it takes about a minute and the shopper can watch the steps on screen. Keep chatting. The looks arrive as a new message; don't call style_outfit again.",
+        },
       };
     },
   };
@@ -315,42 +362,30 @@ function makeHandlers(opts: RouterOptions): Record<string, Handler> {
 
 // ---- stylist result compaction ----
 
-function compactStylist(res: StylistResponse) {
+function compactStylist(res: StylistResult) {
   return {
     spoken_summary: res.spoken_summary,
     looks: res.looks.map((l) => ({
       outfit_name: l.outfit_name,
       total_usd: l.total_usd,
       items: (l.items ?? []).map((it) =>
-        it.product_id ? { product_id: it.product_id, slot: it.slot } : { closet_item: clip(it.closet_item ?? "", SHORT_NAME_CHARS), slot: it.slot },
+        it.product_id
+          ? { product_id: it.product_id, slot: it.slot }
+          : { closet_item: clip(it.closet_item ?? "", SHORT_NAME_CHARS), slot: it.slot },
       ),
     })),
   };
 }
 
-const stylistTrims: NonNullable<HandlerResult["trims"]> = [
+const stylistTrims: Trim[] = [
   { label: "short summary", apply: (o) => ({ ...o, spoken_summary: clip(o.spoken_summary ?? "", 300) }) },
   {
     label: "short names",
     apply: (o) => ({ ...o, looks: o.looks.map((l: any) => ({ ...l, outfit_name: clip(l.outfit_name, SHORT_NAME_CHARS) })) }),
   },
-  ...Array.from({ length: 10 }, () => ({
-    label: "cut looks",
-    apply: (o: any) => (o.looks.length > 1 ? { ...o, looks: o.looks.slice(0, -1) } : o),
-  })),
-  {
-    label: "drop items",
-    apply: (o) => ({ ...o, looks: o.looks.map(({ items, ...l }: any) => l) }),
-  },
+  ...cutList("looks"),
+  { label: "drop items", apply: (o) => ({ ...o, looks: o.looks.map(({ items, ...l }: any) => l) }) },
 ];
-
-/** Tavus "respond" interaction: the avatar replies to `text` as if it were a user turn. */
-export interface RespondMessage {
-  message_type: "conversation";
-  event_type: "conversation.respond";
-  conversation_id: string;
-  properties: { text: string };
-}
 
 function fitRespond(conversationId: string, text: string, threshold: number): RespondMessage {
   const make = (t: string): RespondMessage => ({
@@ -380,15 +415,16 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 // ---- router ----
 
 export function createRouter(opts: RouterOptions) {
-  const handlers = makeHandlers(opts);
+  const prices = new Map<string, number>();
+  const handlers = makeHandlers(opts, prices);
   const log = opts.logger ?? ((line: string) => console.log(line));
   const threshold = opts.trimThresholdBytes ?? TRIM_THRESHOLD_BYTES;
-  const getBridge = typeof opts.bridge === "function" ? opts.bridge : () => opts.bridge as ShopBridge;
+  const getBarn = typeof opts.bridge === "function" ? opts.bridge : () => opts.bridge as Barn;
   const seen = new Set<string>();
 
   /**
    * Returns the tool_result message to send back, or null if `msg` isn't a tool call
-   * (or is a duplicate). Never throws.
+   * (or is a duplicate). Never throws. `send` is used for later messages (background mode).
    */
   async function handle(msg: unknown, send?: (msg: RespondMessage) => void): Promise<ToolResultMessage | null> {
     if (!isToolCall(msg)) return null;
@@ -408,10 +444,10 @@ export function createRouter(opts: RouterOptions) {
       args = parseArguments(msg.properties.arguments);
       opts.onLog?.({ dir: "in", tool: name, tool_call_id: toolCallId, args });
       const handler = Object.hasOwn(handlers, name) ? handlers[name] : undefined;
-      const bridge = getBridge();
+      const barn = getBarn();
       if (!handler) result = err(`Unknown tool ${name}.`);
-      else if (!bridge) result = err("The shop page isn't ready yet. Try again in a moment.");
-      else result = await handler(args as Record<string, unknown>, bridge, { conversationId: msg.conversation_id, send });
+      else if (!barn) result = err("The store isn't loaded yet. Try again in a moment.");
+      else result = await handler(args as Record<string, unknown>, barn, { conversationId: msg.conversation_id, send });
     } catch (e) {
       if (e instanceof SyntaxError && typeof msg.properties.arguments === "string") {
         opts.onLog?.({ dir: "in", tool: name, tool_call_id: toolCallId, args });

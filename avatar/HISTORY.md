@@ -39,3 +39,14 @@
 - Added background mode for style_outfit. It's unverified against the docs: `conversation.respond` with `properties.text` is from memory of the Tavus Interactions protocol. Default stays "await".
 - The timeout is 90 s. The team plan says "no hard timeout" on the Tavus side; ours is only a backend safety net.
 - The remote still had no refs at session start, so nothing was pushed.
+
+## 2026-11-07, session 2 (cont.): realigned to the real repo
+- Mike's main arrived: a static site (site/, no Next.js), window.Barn in site/barn.js, the Sasha PAL (pd1695afe9a5, Ruby face, tavus-gemma LLM) and a prompt that uses tool name add_to_bag. Jing's branch: Express server/, contracts/index.mjs (zod), with run + SSE events. Arjun's Railway URL: backend-production-6d9d.up.railway.app.
+- Decisions:
+  - Adapt to window.Barn rather than ask for window.shop. Deleted my contracts/*.ts drafts so there's one source of truth per shape.
+  - The avatar ships as one committed bundle (dist/avatar.js, 351 KB / 86 KB gzip, includes daily-js). Committed because the site has no build step.
+  - create-conversation is plain .mjs, so Jing's Node server imports it without TS. The route is public, so it has a 20 s cooldown and 30 calls per process (AVATAR_CALL_COOLDOWN_MS, AVATAR_MAX_CALLS).
+  - Spend guardrail: the price comes from Barn.getProduct (if added), then prices seen in earlier results, then Barn.openProduct (navigates). It's checked against Barn.getBag().total before addToBag.
+  - Stylist events are read with fetch, not EventSource: Jing's server replays the run when a client reconnects.
+  - One style_outfit runs at a time (the router refuses a second), on top of the prompt rule.
+- I caught add_to_cart vs the prompt's add_to_bag before registering. A test now checks every tool name appears in pal/system-prompt.md.

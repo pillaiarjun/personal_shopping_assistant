@@ -1,24 +1,25 @@
 # Restart here
 
-Resume prompt: "Read avatar/RESTART.md, avatar/HISTORY.md and avatar/TEAM_PLAN.md, then continue the avatar work."
+Resume prompt: "Read avatar/RESTART.md and avatar/HISTORY.md, then continue the avatar work."
 
-## Done (committed on soham/avatar-skeleton)
-- contracts/ drafts: product.ts, stylist.ts, shop-bridge.ts (window.shop). All need sign-off.
-- avatar/: tools.json, router.ts, shop-bridge.ts, style-outfit.ts (http client + mock), create-conversation.ts (Fetch-API handlers for Jing), register-tools.ts (registry + attach, `--dry`), AvatarCall.tsx (daily-js), .env.example, .gitignore.
-- avatar/dev/ harness written: package.json, tsconfig, vite.config.ts (local /api routes), src/App.tsx, fake-shop.ts, mocks.ts, stub-products.ts, styles.css.
-  - **Not yet installed, built or run.**
-
-## Done in session 2 (2026-11-07)
-- Step 0: switched to the TEAM_PLAN stylist shape (`looks[]`, `closet_item`, `lookbook_artifact`). Updated contracts/stylist.ts (it also adds an optional `conversation_id` to the request), the router, the mock (three looks, demo closet), the fake-shop board, the stub catalog (`jkt-001` ids, singular categories) and tools.json descriptions.
-- Router `styleOutfitMode: "background"`: replies at once, then pushes the looks as a `conversation.respond` app message. This is the fallback if Tavus drops slow results. `handle(msg, send)`: AvatarCall passes send. The harness has a checkbox for it.
-- The style_outfit timeout went from 45 s to 90 s (the plan's target run is < 60 s).
-- Steps 1–3: install, typecheck and tests are all green (21 tests in avatar/test/router.test.ts).
-- Step 4 done. I clicked every preset in Chrome on macOS. Search, show, cart, bad size, the three-look board with owned pieces (dashed green), backend fails, bad args, unknown tool and the background-mode rework all behave as expected. The background push was 1334B. The style result was 1088B. The console showed no exceptions. The Vite dedupe resolves react and daily-js for ../AvatarCall.tsx.
-- Known mock quirk: the mock's budget/3 rule makes all 3 looks reuse the same closet trousers and shoes. This is mock-only and doesn't matter.
+## Current state (2026-11-07, ~12:10 PM, session 2)
+- Branch soham/avatar-skeleton, rebased onto origin/main (Arjun's static site, Mike's pal/). **Not pushed yet.**
+- Built against the real repo:
+  - router.ts → window.Barn (search / openProduct / addToBag / getBag / showLooks / addFeedStep / resetFeed).
+  - tools.json: search_products, show_product, **add_to_bag** (the name Sasha's prompt uses), style_outfit (budget required, plus optional rework_slot/rework_feedback).
+  - $10,000 per-conversation guardrail in code. add_to_bag refuses when the bag would pass it. style_outfit caps budget_usd and says so.
+  - style-outfit.ts: Jing's two-step API (POST /api/stylist/run → SSE /api/stylist/events), read with fetch. Steps go to Barn.addFeedStep.
+  - web.ts → dist/avatar.js. Mounts the call in #avatar-slot. barn:brief goes to Sasha mid-call (conversation.respond), or straight to the stylist with no call (the budget is parsed from the text). ?avatar_debug=1 opens the mock panel.
+  - create-conversation.mjs: `mountAvatarRoutes(app)` for Jing's Express server. It has a cooldown and a per-run call cap. It sends the demo shopper as conversational_context.
+  - The React harness and contracts/*.ts drafts are deleted (superseded by Barn and Jing's contracts/index.mjs).
+- Verified: typecheck, 26 tests, and an end-to-end run in Chrome. The real site plus Jing's stub backend plus dist/avatar.js all worked: search, show, add, sold out, the stylist feed streaming 9 steps, the budget cap, no budget, and typed briefs with and without a budget.
+- avatar/.env holds TAVUS_API_KEY and TAVUS_PAL_ID (both set). The dry run of register-tools passed: all 4 tools would be created on PAL pd1695afe9a5.
 
 ## Next steps
-5. `avatar/.env` exists, copied from .env.example on 2026-11-07. It's gitignored, and all values are still empty. Soham fills in TAVUS_API_KEY and TAVUS_PAL_ID from Mike in an editor. Never paste keys into chat and never print the values. Check them with awk for set/empty only. Restart the dev server after any edit.
-   Before a live call: get the PAL ID and key from Mike, run `register-tools -- --dry`, then the real register-tools. **Ask Soham before the first live call.**
-6. Push the branch only after Mike's main exists (see HISTORY.md), then rebase onto main.
-7. Final report must list: files, doc uncertainties, contracts drafts, and asks for Mike (PAL ID, key, does the PAL have a default face?, put "don't call style_outfit twice" plus the filler behaviour in the PAL prompt), Jing (route path, one-line import of handleCreateConversation, style-outfit request body incl. conversation_id for Session keying, and confirm the route returns the plan's looks[] shape) and Arjun (window.shop per contracts/shop-bridge.ts).
-8. Before the live 60–90 s test, verify the `conversation.respond` event name and its `properties.text` field in the Tavus docs ("Interactions protocol"). Background mode relies on them, and they are unverified.
+1. **Ask Soham**, then run `npm --prefix avatar/dev run register-tools` (the real one; it changes the shared PAL).
+2. Push the branch and open a PR. Arjun asked for this.
+3. Arjun: add one line to site/index.html after barn.js: `<script type="module" src="../avatar/dist/avatar.js"></script>`. Optionally add `Barn.getProduct(id)`, which avoids opening the page for the price check. Finish showLooks / the outfit board.
+4. Jing: `import { mountAvatarRoutes } from '../avatar/create-conversation.mjs'; mountAvatarRoutes(app)` in server/index.js. Set TAVUS_API_KEY on Railway. Confirm the rework {slot, feedback} handling.
+5. Mike: mention rework_slot/rework_feedback in the prompt's "Changing a look" section. Today it says to use notes, and both work.
+6. **Ask Soham before the first live call.** Then test a 60–90 s style_outfit. If Tavus drops it, use ?avatar_mode=background, after checking the `conversation.respond` event name in the Tavus docs (unverified).
+7. Final report: files, doc uncertainties, and the asks above.

@@ -1,113 +1,74 @@
 [
   {
     "name": "search_products",
-    "description": "Search the shop's menswear catalog and filter the product grid the shopper is looking at. Call this whenever the shopper describes something they want (an item, colour, budget or category). Returns up to 5 matches with id, name and price. Mention one to three of them by name; the full grid is already on screen, so never read out ids or the whole list.",
+    "description": "Search the Men's Fashion Barn catalog and filter the product grid the shopper is looking at. Call it for any browsing request, and right after the shopper describes an event so the page starts moving. Fill in only the filters the shopper's words support. max_price is a per-item limit, never an outfit budget. Returns up to 5 matches (id, title, brand, price); name two at most, the rest are on screen.",
     "parameters": {
       "type": "object",
       "properties": {
-        "query": {
-          "type": "string",
-          "description": "Free-text description, e.g. 'linen shirt' or 'chelsea boots'."
-        },
-        "category": {
-          "type": "string",
-          "description": "Product category if the shopper named one: 'jacket', 'shirt', 'trousers' or 'shoes'."
-        },
-        "max_price": {
-          "type": "number",
-          "description": "Maximum price in US dollars."
-        },
-        "color": {
-          "type": "string",
-          "description": "Colour, e.g. 'navy'."
-        }
+        "query": { "type": "string", "description": "Free text matched against title, brand, type and colour, e.g. 'linen shirt' or 'loafers'." },
+        "department": { "type": "string", "description": "One of: 'Suits & tuxedos', 'Shirts & tees', 'Knits & sweats', 'Trousers & denim', 'Shorts & swim', 'Outerwear', 'Shoes', 'Ties & formal extras', 'Accessories'. Loose names like 'suits' or 'shoes' also work." },
+        "style": { "type": "string", "description": "One of: 'Formal', 'Business Casual', 'Casual', 'Streetwear', 'Athletic'." },
+        "brand": { "type": "string", "description": "Brand name, only if the shopper named one." },
+        "color": { "type": "string", "description": "Colour, e.g. 'navy'." },
+        "max_price": { "type": "number", "description": "Maximum price per item in US dollars." },
+        "on_sale": { "type": "boolean", "description": "true to show only items on sale." }
       },
       "required": []
     },
     "origin": "llm",
     "on_call": "silent",
     "on_resolve": "generate_response",
-    "delivery": {
-      "app_message": true
-    }
+    "delivery": { "app_message": true }
   },
   {
     "name": "show_product",
-    "description": "Open one product's detail view on the shopper's screen. Use a product_id returned by search_products or style_outfit. Call it when the shopper asks to see, look at or hear more about a specific item. Returns the product's name, price, sizes and a one-line description.",
+    "description": "Open one product's page on the shopper's screen. Use a product_id exactly as search_products or style_outfit returned it; never guess or build an id. Returns title, brand, price, sizes in stock and colours.",
     "parameters": {
       "type": "object",
       "properties": {
-        "product_id": {
-          "type": "string",
-          "description": "Exact id from a previous search_products or style_outfit result, e.g. 'jkt-001'."
-        }
+        "product_id": { "type": "string", "description": "Exact id from a tool result, e.g. 'MW-0001'." }
       },
-      "required": [
-        "product_id"
-      ]
+      "required": ["product_id"]
     },
     "origin": "llm",
     "on_call": "silent",
     "on_resolve": "generate_response",
-    "delivery": {
-      "app_message": true
-    }
+    "delivery": { "app_message": true }
   },
   {
-    "name": "add_to_cart",
-    "description": "Add one product in one size to the shopper's cart. ONLY call this after you have asked the shopper out loud and they have explicitly said yes to adding this exact item in this exact size in their most recent turn. Never call it on your own initiative, from an implied interest, or for a whole outfit at once; if the size is unknown, ask for it first. Returns the new cart count and total, or a short reason it failed.",
+    "name": "add_to_bag",
+    "description": "Add one product to the shopper's bag. ONLY call this after the shopper has said yes out loud, in this conversation, to adding this exact item in this size (and colour, if it comes in more than one). Interest is not a yes. Never add closet items. The bag has a hard limit of 10,000 dollars per conversation, enforced here. Returns the bag count and total, or a short reason it failed (size out of stock, over the limit).",
     "parameters": {
       "type": "object",
       "properties": {
-        "product_id": {
-          "type": "string",
-          "description": "Exact id of the product the shopper confirmed."
-        },
-        "size": {
-          "type": "string",
-          "description": "Size the shopper confirmed, exactly as listed for the product, e.g. 'M' or '32x32'."
-        }
+        "product_id": { "type": "string", "description": "Exact id of the confirmed product." },
+        "size": { "type": "string", "description": "Confirmed size as the product lists it, e.g. '40R', 'M', '10'. Omit only for one-size items." },
+        "color": { "type": "string", "description": "Confirmed colour, if the item comes in more than one." }
       },
-      "required": [
-        "product_id",
-        "size"
-      ]
+      "required": ["product_id"]
     },
     "origin": "llm",
     "on_call": "silent",
     "on_resolve": "generate_response",
-    "delivery": {
-      "app_message": true
-    }
+    "delivery": { "app_message": true }
   },
   {
     "name": "style_outfit",
-    "description": "Ask the in-house stylist agent to build three complete looks (jacket, shirt, trousers, shoes) for an occasion, reusing clothes the shopper already owns, and show them on the outfit board. Use it when the shopper wants a full look, and again with notes when they want to change a piece of the looks (e.g. 'the shoes are too formal'). This is SLOW (up to a minute) and the shopper can watch the stylist's steps on screen: keep the conversation going while it runs, e.g. ask one question about colours or the venue, and never call it again while it is running. Returns each look's name, items by slot, total price and a short spoken_summary; say the summary in your own words and do not read out ids or prices item by item.",
+    "description": "Hand the brief to the styling agent, which builds three complete looks from the catalog and the shopper's closet and puts them on the outfit board. You need the event and the budget first. It is SLOW (about a minute) and the shopper can watch each step on screen: keep them company, never predict the result, and never call it again while it runs. To change one piece of the looks, call it again with the same occasion and budget plus rework_slot and rework_feedback. Returns the looks (names, totals, items by slot) and a spoken_summary to say in your own voice.",
     "parameters": {
       "type": "object",
       "properties": {
-        "occasion": {
-          "type": "string",
-          "description": "What the outfit is for, e.g. 'summer wedding guest' or 'first day at a new office job'."
-        },
-        "budget_usd": {
-          "type": "number",
-          "description": "Total budget for the outfit in US dollars, if the shopper gave one."
-        },
-        "notes": {
-          "type": "string",
-          "description": "Anything else the shopper said: colours, fit, sizes, items to avoid, items they already own, or what to change in the previous looks."
-        }
+        "occasion": { "type": "string", "description": "The event, e.g. 'summer wedding in Italy'." },
+        "budget_usd": { "type": "number", "description": "Total budget for this outfit in US dollars, as the shopper said it. Never above 10000." },
+        "notes": { "type": "string", "description": "Everything useful: dress code, season, location, colours, likes and dislikes, closet items to reuse, or that this is a second, separate outfit." },
+        "rework_slot": { "type": "string", "description": "Only when changing one piece: the slot to change, e.g. 'Shoes'." },
+        "rework_feedback": { "type": "string", "description": "Only when changing one piece: what's wrong with it, e.g. 'too formal'." }
       },
-      "required": [
-        "occasion"
-      ]
+      "required": ["occasion", "budget_usd"]
     },
     "origin": "llm",
     "on_call": "generate_filler",
     "on_resolve": "generate_response",
-    "delivery": {
-      "app_message": true
-    }
+    "delivery": { "app_message": true }
   }
 ]
