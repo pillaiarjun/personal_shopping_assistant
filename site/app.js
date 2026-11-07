@@ -28,7 +28,8 @@ const main = document.getElementById("main");
 let P = [], L = [], byId = {}, shown = PAGE;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const img = (p, i = 0) => IMG + p.images[Math.min(i, p.images.length - 1)];
+// The live store serves every photo as .webp, whatever extension the catalog lists.
+const img = (p, i = 0) => IMG + p.images[Math.min(i, p.images.length - 1)].replace(/\.[a-z]+$/i, ".webp");
 const money = (n) => "$" + (Number.isInteger(n) ? n : n.toFixed(2));
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 const deptOf = (p) => Object.keys(DEPTS).find((d) => DEPTS[d].includes(p.category));
