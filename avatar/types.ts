@@ -19,6 +19,8 @@ export interface BarnSearchFilters {
   brand?: string;
   color?: string;
   max_price?: number;
+  /** Shopper's size for the garment searched: "40R", "15.5 / 32-33", "32", "10". */
+  size?: string;
   sale?: boolean;
 }
 
@@ -45,8 +47,8 @@ export interface Barn {
   showLooks(result: StylistResult): unknown;
   addFeedStep(step: { id: string; label?: string; status?: StepStatus }): unknown;
   resetFeed(): unknown;
-  /** Not in barn.js yet (asked Arjun): price lookup without navigating. */
-  getProduct?(id: string): BarnBrief | null;
+  /** Price lookup without navigating (barn.js, Arjun #9). */
+  getProduct?(id: string): ({ ok: true } & BarnBrief) | { ok: false; error: string; price?: undefined } | null;
 }
 
 declare global {

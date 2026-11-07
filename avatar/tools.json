@@ -29,6 +29,10 @@
           "type": "number",
           "description": "Maximum price per item in US dollars."
         },
+        "size": {
+          "type": "string",
+          "description": "The shopper's size for the garment being searched, to show only items in stock in that size: jacket '40R', shirt '15.5 / 32-33', waist '32', shoe '10'."
+        },
         "on_sale": {
           "type": "boolean",
           "description": "true to show only items on sale."
@@ -107,7 +111,7 @@
         },
         "budget_usd": {
           "type": "number",
-          "description": "Total budget for this outfit in US dollars, as the shopper said it. Never above 10000."
+          "description": "Total budget for this outfit in US dollars, as the shopper said it. The 10,000 dollar limit covers all outfits and the bag in this conversation; the result says if the budget was capped."
         },
         "notes": {
           "type": "string",

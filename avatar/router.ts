@@ -178,6 +178,9 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
   const log = opts.logger ?? ((line: string) => console.log(line));
   const threshold = opts.trimThresholdBytes ?? TRIM_THRESHOLD_BYTES;
   let styleRunning = false;
+  /** Budgets of the outfits built so far, keyed by occasion (a rework or a retry of the same occasion replaces, not adds). */
+  const outfitBudgets = new Map<string, number>();
+  const occasionKey = (o: string) => o.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
   return {
     async search_products(raw, barn) {
@@ -190,6 +193,7 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
         brand: { type: "string" },
         color: { type: "string" },
         max_price: { type: "number" },
+        size: { type: "string" },
         on_sale: { type: "boolean" },
       });
       if (!v.ok) return err(v.error);
@@ -201,6 +205,7 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
       if (a.brand) filters.brand = a.brand as string;
       if (a.color) filters.color = a.color as string;
       if (a.max_price !== undefined) filters.max_price = a.max_price as number;
+      if (a.size) filters.size = a.size as string;
       if (a.on_sale) filters.sale = true;
       const results = (await barn.search(filters)) ?? [];
       for (const p of results) prices.set(p.id, p.price);
@@ -294,7 +299,16 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
       const a = v.args;
       const asked = a.budget_usd as number;
       if (!(asked > 0)) return err("The budget has to be more than zero. Ask the shopper what they want to spend.");
-      const capped = Math.min(asked, limit);
+      // $10,000 per conversation across all outfits and the bag. Items bought from a look count
+      // toward both, so committed spend is the larger of the bag and the other outfits' budgets.
+      const key = occasionKey(a.occasion as string);
+      const otherOutfits = [...outfitBudgets].filter(([k]) => k !== key).reduce((sum, [, b]) => sum + b, 0);
+      const bagTotal = (await barn.getBag())?.total ?? 0;
+      const room = usd(limit - Math.max(bagTotal, otherOutfits));
+      if (room <= 0) {
+        return err(`The ${limit} dollar limit for this conversation is used up by the earlier outfits and the bag. Tell the shopper no more looks this time.`);
+      }
+      const capped = Math.min(asked, room);
       const req: RunRequest = {
         shopper_id: shopperId,
         conversation_id: ctx.conversationId || "no-conversation",
@@ -305,7 +319,10 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
           ? { rework: { slot: a.rework_slot as string, feedback: a.rework_feedback as string } }
           : {}),
       };
-      const capNote = capped < asked ? { budget_note: `Budget capped at ${limit} dollars, the per-conversation limit.` } : {};
+      const capNote =
+        capped < asked
+          ? { budget_note: `Budget capped at ${capped} dollars: the limit is ${limit} dollars per conversation across all outfits and the bag.` }
+          : {};
 
       const run = async (): Promise<HandlerResult> => {
         styleRunning = true;
@@ -321,6 +338,7 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
         if (!res || !Array.isArray(res.looks) || res.looks.length === 0) {
           return err("The stylist came back with no looks. Say so plainly and offer to try again.");
         }
+        outfitBudgets.set(key, capped);
         try {
           await barn.showLooks(res);
         } catch (e) {

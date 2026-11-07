@@ -54,3 +54,5 @@
 - Mike: search_products query now says garment words only (q matches product names). The demo shopper was already sent as conversational_context.
 - Jing pasted a live ZooWork key in the group chat. It's not stored anywhere in avatar/. Suggested rotating it.
 - Registered the 4 tools on the PAL with Soham's OK. Rebased onto the new main: Arjun's bag already has its own $10k check in Barn.addToBag (ours stays, before the call), and Jing mounts avatar routes when present. Mike's revised prompt calls the search text "q", so the router accepts q as an alias for query.
+- Mike's 7 PAL notes: 1–4 were already done. 5: the limit now spans outfits. A new style_outfit budget is capped at limit - max(bag total, other outfits' budgets); the same occasion (rework or retry) replaces, not adds. 6: rework_slot/rework_feedback were already on style_outfit (told Mike). 7: test/demo-script.test.ts walks pal/demo-script.md steps 2–10.
+- Arjun #9: Barn.getProduct ({ok,...brief}), a size filter on Barn.search (added as search_products `size`), and the script tag on main. Re-registered the tools after the tools.json change.

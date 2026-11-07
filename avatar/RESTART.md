@@ -18,8 +18,8 @@ Resume prompt: "Read avatar/RESTART.md and avatar/HISTORY.md, then continue the 
 ## Next steps
 1. DONE: tools registered on PAL pd1695afe9a5 (search_products ta0e9f4d6d5da, show_product te3a85078857e, add_to_bag td53261f3b55f, style_outfit tc288127b00d9). Re-run register-tools after any tools.json change.
 2. DONE: branch pushed, PR opened. Jing's server on main already mounts create-conversation.mjs (verified locally: "avatar routes mounted").
-3. Arjun: add one line to site/index.html after barn.js: `<script type="module" src="../avatar/dist/avatar.js"></script>`. Optionally add `Barn.getProduct(id)`, which avoids opening the page for the price check. Finish showLooks / the outfit board.
+3. DONE by Arjun (#9): the script tag, Barn.getProduct, and the size filter. Still his: showLooks / the outfit board.
 4. Jing/Arjun: set TAVUS_API_KEY on Railway (the mount is already on main). Confirm the rework {slot, feedback} handling.
-5. Mike: mention rework_slot/rework_feedback in the prompt's "Changing a look" section. Today it says to use notes, and both work.
+5. Mike: rework_slot/rework_feedback exist on style_outfit. He can switch the prompt's "Changing a look" from notes to these.
 6. **Ask Soham before the first live call.** style_outfit now defaults to background mode (at Jing's request: real runs take 40–60 s). `conversation.respond` + `properties.text` is confirmed in the Tavus docs (interactions-protocols/overview). On the call, check that Sasha speaks the [Stylist result] message. ?avatar_mode=await switches back.
 7. Final report: files, doc uncertainties, and the asks above.
