@@ -29,3 +29,6 @@ code { display: block; white-space: pre-wrap; word-break: break-all; font-size: 
 .row.error { background: #fff1f0; }
 .warn { color: #b25e00; font-weight: 600; }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+.look { margin-top: 8px; }
+.look h3 { margin: 4px 0; font-size: 14px; }
+.outfit-item.owned { background: #eef4ec; border: 1px dashed #9bb59a; }

@@ -4,7 +4,7 @@
 
 import type { Product } from "../contracts/product";
 import type { AddToCartResult, SearchFilters, ShopBridge } from "../contracts/shop-bridge";
-import type { StylistResponse } from "../contracts/stylist";
+import type { StyleOutfitRequest, StylistResponse } from "../contracts/stylist";
 import type { StyleOutfitFn } from "./style-outfit";
 import { DEFAULT_STYLE_OUTFIT_TIMEOUT_MS } from "./style-outfit";
 
@@ -62,6 +62,12 @@ export interface RouterOptions {
   bridge: ShopBridge | (() => ShopBridge | undefined);
   styleOutfit: StyleOutfitFn;
   styleOutfitTimeoutMs?: number;
+  /**
+   * "await" (default): the tool_result waits for the styling run.
+   * "background": reply at once, then push the looks as a conversation.respond message.
+   * Fallback in case Tavus drops slow tool results (TEAM_PLAN risk table).
+   */
+  styleOutfitMode?: "await" | "background";
   trimThresholdBytes?: number;
   /** Structured log for the debug panel. */
   onLog?: (entry: RouterLogEntry) => void;
@@ -149,7 +155,13 @@ type HandlerResult = {
   trims?: Array<{ label: string; apply: (o: any) => any }>;
 };
 
-type Handler = (args: Record<string, unknown>, bridge: ShopBridge) => Promise<HandlerResult>;
+interface HandlerContext {
+  conversationId: string;
+  /** Sends a later, unsolicited app message (background style_outfit). */
+  send?: (msg: RespondMessage) => void;
+}
+
+type Handler = (args: Record<string, unknown>, bridge: ShopBridge, ctx: HandlerContext) => Promise<HandlerResult>;
 
 const err = (output: string): HandlerResult => ({ status: "error", output });
 
@@ -178,6 +190,9 @@ function listTrims(listKey: string, minKeep = 1) {
 
 function makeHandlers(opts: RouterOptions): Record<string, Handler> {
   const styleTimeout = opts.styleOutfitTimeoutMs ?? DEFAULT_STYLE_OUTFIT_TIMEOUT_MS;
+  const styleMode = opts.styleOutfitMode ?? "await";
+  const log = opts.logger ?? ((line: string) => console.log(line));
+  const threshold = opts.trimThresholdBytes ?? TRIM_THRESHOLD_BYTES;
 
   return {
     async search_products(raw, bridge) {
@@ -235,43 +250,121 @@ function makeHandlers(opts: RouterOptions): Record<string, Handler> {
       };
     },
 
-    async style_outfit(raw, bridge) {
+    async style_outfit(raw, bridge, ctx) {
       const v = validate(raw, {
         occasion: { type: "string", required: true },
         budget_usd: { type: "number" },
         notes: { type: "string" },
       });
       if (!v.ok) return err(v.error);
-      let outfit: StylistResponse;
-      try {
-        outfit = await withTimeout(opts.styleOutfit(v.args as any), styleTimeout);
-      } catch (e) {
-        opts.onLog?.({ dir: "info", text: `style_outfit backend failed: ${(e as Error).message}` });
-        return err(
-          "The stylist couldn't finish that look right now. Apologise briefly and offer to build it piece by piece with search instead.",
-        );
+      const req: StyleOutfitRequest = {
+        ...(v.args as Omit<StyleOutfitRequest, "conversation_id">),
+        ...(ctx.conversationId ? { conversation_id: ctx.conversationId } : {}),
+      };
+
+      const run = async (): Promise<HandlerResult> => {
+        let res: StylistResponse;
+        try {
+          res = await withTimeout(opts.styleOutfit(req), styleTimeout);
+        } catch (e) {
+          opts.onLog?.({ dir: "info", text: `style_outfit backend failed: ${(e as Error).message}` });
+          return err(
+            "The stylist couldn't finish those looks right now. Apologise briefly and offer to build it piece by piece with search instead.",
+          );
+        }
+        if (!res || !Array.isArray(res.looks) || res.looks.length === 0) {
+          return err("The stylist sent back no looks. Offer to try again.");
+        }
+        try {
+          await bridge.showOutfit(res);
+        } catch (e) {
+          opts.onLog?.({ dir: "info", text: `showOutfit threw: ${(e as Error).message}` });
+        }
+        return { status: "success", output: compactStylist(res), trims: stylistTrims };
+      };
+
+      if (styleMode === "await" || !ctx.send) {
+        if (styleMode === "background") log("[tool] style_outfit background mode needs a send function; awaiting instead");
+        return run();
       }
-      if (!outfit || !Array.isArray(outfit.items)) return err("The stylist sent back an empty look. Offer to try again.");
-      try {
-        await bridge.showOutfit(outfit);
-      } catch (e) {
-        opts.onLog?.({ dir: "info", text: `showOutfit threw: ${(e as Error).message}` });
-      }
+
+      // Background mode: answer at once so Tavus never waits on a slow run, then push the
+      // looks as a conversation.respond message when the run finishes.
+      const send = ctx.send;
+      void run().then((r) => {
+        const text =
+          r.status === "success"
+            ? `[Stylist result, not said by the shopper] The looks are now on the outfit board: ${JSON.stringify(r.output)}. Tell the shopper about them using spoken_summary.`
+            : `[Stylist result, not said by the shopper] ${r.output}`;
+        const msg = fitRespond(ctx.conversationId, text, threshold);
+        log(`[tool] style_outfit background result ${byteLength(msg)}B`);
+        opts.onLog?.({ dir: "info", text: `style_outfit pushed ${r.status} via conversation.respond (${byteLength(msg)}B)` });
+        try {
+          send(msg);
+        } catch (e) {
+          log(`[tool] style_outfit background send failed: ${(e as Error).message}`);
+        }
+      });
       return {
         status: "success",
-        output: {
-          outfit_name: outfit.outfit_name,
-          total_usd: outfit.total_usd,
-          spoken_summary: outfit.spoken_summary,
-          items: outfit.items.map(({ product_id, slot }) => ({ product_id, slot })),
-        },
-        trims: [
-          { label: "short summary", apply: (o) => ({ ...o, spoken_summary: clip(o.spoken_summary ?? "", 300) }) },
-          ...listTrims("items").slice(2),
-        ],
+        output: "The stylist has started building three looks; this takes up to a minute. Keep chatting and do not call style_outfit again. The looks will arrive as a new message.",
       };
     },
   };
+}
+
+// ---- stylist result compaction ----
+
+function compactStylist(res: StylistResponse) {
+  return {
+    spoken_summary: res.spoken_summary,
+    looks: res.looks.map((l) => ({
+      outfit_name: l.outfit_name,
+      total_usd: l.total_usd,
+      items: (l.items ?? []).map((it) =>
+        it.product_id ? { product_id: it.product_id, slot: it.slot } : { closet_item: clip(it.closet_item ?? "", SHORT_NAME_CHARS), slot: it.slot },
+      ),
+    })),
+  };
+}
+
+const stylistTrims: NonNullable<HandlerResult["trims"]> = [
+  { label: "short summary", apply: (o) => ({ ...o, spoken_summary: clip(o.spoken_summary ?? "", 300) }) },
+  {
+    label: "short names",
+    apply: (o) => ({ ...o, looks: o.looks.map((l: any) => ({ ...l, outfit_name: clip(l.outfit_name, SHORT_NAME_CHARS) })) }),
+  },
+  ...Array.from({ length: 10 }, () => ({
+    label: "cut looks",
+    apply: (o: any) => (o.looks.length > 1 ? { ...o, looks: o.looks.slice(0, -1) } : o),
+  })),
+  {
+    label: "drop items",
+    apply: (o) => ({ ...o, looks: o.looks.map(({ items, ...l }: any) => l) }),
+  },
+];
+
+/** Tavus "respond" interaction: the avatar replies to `text` as if it were a user turn. */
+export interface RespondMessage {
+  message_type: "conversation";
+  event_type: "conversation.respond";
+  conversation_id: string;
+  properties: { text: string };
+}
+
+function fitRespond(conversationId: string, text: string, threshold: number): RespondMessage {
+  const make = (t: string): RespondMessage => ({
+    message_type: "conversation",
+    event_type: "conversation.respond",
+    conversation_id: conversationId,
+    properties: { text: t },
+  });
+  let msg = make(text);
+  while (byteLength(msg) > threshold && text.length > 200) {
+    text = text.slice(0, Math.floor(text.length * 0.8));
+    msg = make(text + "…");
+  }
+  return msg;
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -297,7 +390,7 @@ export function createRouter(opts: RouterOptions) {
    * Returns the tool_result message to send back, or null if `msg` isn't a tool call
    * (or is a duplicate). Never throws.
    */
-  async function handle(msg: unknown): Promise<ToolResultMessage | null> {
+  async function handle(msg: unknown, send?: (msg: RespondMessage) => void): Promise<ToolResultMessage | null> {
     if (!isToolCall(msg)) return null;
     const started = Date.now();
     const { name } = msg.properties;
@@ -318,7 +411,7 @@ export function createRouter(opts: RouterOptions) {
       const bridge = getBridge();
       if (!handler) result = err(`Unknown tool ${name}.`);
       else if (!bridge) result = err("The shop page isn't ready yet. Try again in a moment.");
-      else result = await handler(args as Record<string, unknown>, bridge);
+      else result = await handler(args as Record<string, unknown>, bridge, { conversationId: msg.conversation_id, send });
     } catch (e) {
       if (e instanceof SyntaxError && typeof msg.properties.arguments === "string") {
         opts.onLog?.({ dir: "in", tool: name, tool_call_id: toolCallId, args });

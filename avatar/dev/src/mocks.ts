@@ -19,13 +19,22 @@ export function toolCall(name: string, args: Record<string, unknown> | string): 
 export const PRESETS: Array<{ label: string; make: () => ToolCallMessage }> = [
   { label: "search: linen under $80", make: () => toolCall("search_products", { query: "linen", max_price: 80 }) },
   { label: "search: navy", make: () => toolCall("search_products", { color: "navy" }) },
-  { label: "show p_009", make: () => toolCall("show_product", { product_id: "p_009" }) },
-  { label: "add p_009 size 10", make: () => toolCall("add_to_cart", { product_id: "p_009", size: "10" }) },
-  { label: "add bad size", make: () => toolCall("add_to_cart", { product_id: "p_009", size: "XXL" }) },
+  { label: "search: jackets under $250", make: () => toolCall("search_products", { category: "jacket", max_price: 250 }) },
+  { label: "show jkt-001", make: () => toolCall("show_product", { product_id: "jkt-001" }) },
+  { label: "add jkt-001 size M", make: () => toolCall("add_to_cart", { product_id: "jkt-001", size: "M" }) },
+  { label: "add bad size", make: () => toolCall("add_to_cart", { product_id: "jkt-001", size: "XXL" }) },
   {
-    label: "style: summer wedding $400",
+    label: "style: Italy wedding $800",
     make: () =>
-      toolCall("style_outfit", { occasion: "summer wedding guest", budget_usd: 400, response_to_user: "Let me pull a look together." }),
+      toolCall("style_outfit", {
+        occasion: "summer wedding in Italy",
+        budget_usd: 800,
+        response_to_user: "Let me pull some looks together.",
+      }),
+  },
+  {
+    label: "style rework: shoes too formal",
+    make: () => toolCall("style_outfit", { occasion: "summer wedding in Italy", budget_usd: 800, notes: "the shoes are too formal" }),
   },
   { label: "style: backend fails", make: () => toolCall("style_outfit", { occasion: "office", notes: "fail" }) },
   { label: "bad args", make: () => toolCall("show_product", {}) },

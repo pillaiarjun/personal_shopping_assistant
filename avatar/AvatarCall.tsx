@@ -97,14 +97,17 @@ export default function AvatarCall({
     const onMessage = async (ev?: DailyEventObjectAppMessage) => {
       if (!ev || !call) return;
       live.current.onAppMessage?.("in", ev.data);
-      const result = await live.current.router.handle(ev.data);
-      if (!result || cancelled) return;
-      live.current.onAppMessage?.("out", result);
-      try {
-        call.sendAppMessage(result, "*");
-      } catch (e) {
-        console.error("[avatar] sendAppMessage failed", e);
-      }
+      const send = (msg: unknown) => {
+        if (cancelled || !call) return;
+        live.current.onAppMessage?.("out", msg);
+        try {
+          call.sendAppMessage(msg, "*");
+        } catch (e) {
+          console.error("[avatar] sendAppMessage failed", e);
+        }
+      };
+      const result = await live.current.router.handle(ev.data, send);
+      if (result) send(result);
     };
 
     lifecycle = lifecycle.then(async () => {

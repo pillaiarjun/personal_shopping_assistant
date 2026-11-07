@@ -33,3 +33,9 @@
 - Risk: Tavus may drop a slow tool result. The fallback is to return the style_outfit result immediately ("working on it") and push the looks later as a new message. Probably via conversation.respond or append-context; check the docs. Make it a router option, and test a 60–90 s call early.
 - Soham also owns: portal registration and submission form, scripted tests, a text-box fallback if video fails, the recording and the pitch.
 - The plan says to keep the contracts in a CLAUDE.md. Soham wants CLAUDE.md minimal, so the contracts stay in contracts/*.ts and TEAM_PLAN.md.
+
+## 2026-11-07, session 2
+- Switched everything to the TEAM_PLAN stylist shape. In the result sent to the avatar, the router drops each item's `why` (the page shows it) and keeps slot plus product_id or closet_item. Trim order: summary, then names, then whole looks, then item lists.
+- Added background mode for style_outfit. It's unverified against the docs: `conversation.respond` with `properties.text` is from memory of the Tavus Interactions protocol. Default stays "await".
+- The timeout is 90 s. The team plan says "no hard timeout" on the Tavus side; ours is only a backend safety net.
+- The remote still had no refs at session start, so nothing was pushed.

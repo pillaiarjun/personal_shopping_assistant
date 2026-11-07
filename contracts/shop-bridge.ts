@@ -1,11 +1,11 @@
-// DRAFT — Arjun + Soham agree this at the 1:15 pairing.
+// DRAFT — Arjun + Soham agree this at the 12:30 PM pairing gate.
 //
 // The shop page implements ShopBridge and assigns it to window.shop. The avatar's tool
 // router (avatar/router.ts) calls it when Tavus sends a tool call, and you can drive it
 // from the browser console too:
 //   await window.shop.searchProducts({ query: "linen shirt", max_price: 80 })
-//   await window.shop.showProduct("p_001")
-//   await window.shop.addToCart("p_001", "M")
+//   await window.shop.showProduct("jkt-001")
+//   await window.shop.addToCart("jkt-001", "M")
 //
 // Every method may be sync or async. The page owns all rendering; the router only
 // receives compact data back and trims it before sending it to the avatar.
@@ -33,7 +33,7 @@ export interface ShopBridge {
   showProduct(productId: string): Product | null | Promise<Product | null>;
   /** Add to cart. Only called after the shopper says yes out loud. */
   addToCart(productId: string, size: string): AddToCartResult | Promise<AddToCartResult>;
-  /** Render the outfit board from the stylist response. */
+  /** Render the outfit board (all looks; items are product_id or closet_item) from the stylist response. */
   showOutfit(outfit: StylistResponse): void | Promise<void>;
 }
 

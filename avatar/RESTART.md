@@ -8,17 +8,16 @@ Resume prompt: "Read avatar/RESTART.md, avatar/HISTORY.md and avatar/TEAM_PLAN.m
 - avatar/dev/ harness written: package.json, tsconfig, vite.config.ts (local /api routes), src/App.tsx, fake-shop.ts, mocks.ts, stub-products.ts, styles.css.
   - **Not yet installed, built or run.**
 
+## Done in session 2 (2026-11-07)
+- Step 0: switched to the TEAM_PLAN stylist shape (`looks[]`, `closet_item`, `lookbook_artifact`). Updated contracts/stylist.ts (it also adds an optional `conversation_id` to the request), the router, the mock (three looks, demo closet), the fake-shop board, the stub catalog (`jkt-001` ids, singular categories) and tools.json descriptions.
+- Router `styleOutfitMode: "background"`: replies at once, then pushes the looks as a `conversation.respond` app message. This is the fallback if Tavus drops slow results. `handle(msg, send)`: AvatarCall passes send. The harness has a checkbox for it.
+- The style_outfit timeout went from 45 s to 90 s (the plan's target run is < 60 s).
+- Steps 1–3: install, typecheck and tests are all green (21 tests in avatar/test/router.test.ts).
+- Step 4 (partial): the dev server runs on :5175. /api/config and the mock /api/style-outfit respond. The Vite dedupe resolves react and daily-js for ../AvatarCall.tsx. **The browser click-through is still not done.**
+
 ## Next steps
-0. Switch to the TEAM_PLAN stylist shape: `looks[]`, `closet_item`, `lookbook_artifact` (see HISTORY.md). Update contracts/stylist.ts, the router, the mock, fake-shop, App and the stub ids/categories. The Arjun pairing gate is 12:30 PM.
-1. `npm --prefix avatar/dev install`, then `npm --prefix avatar/dev run typecheck`, and fix errors.
-2. Write avatar/test/router.test.ts using node:test via tsx. Feed mocks for all 4 tools and assert:
-   - the right bridge call
-   - the result is under 4 KB
-   - the reply shape is right
-   - an oversized search gets trimmed
-   - bad args, an unknown tool, a missing bridge and a style_outfit timeout each return an error and never throw
-3. Run `npm --prefix avatar/dev test`.
-4. Run `npm --prefix avatar/dev run dev`, open http://localhost:5175, click the mock presets, and check the fake shop and the log. Verify that the Vite `resolve.dedupe` resolves react and daily-js for ../AvatarCall.tsx.
+4. Open http://localhost:5175 and click every preset, including the background-mode checkbox. Check the outfit board and the log.
 5. Before a live call: get the PAL ID and key from Mike, run `register-tools -- --dry`, then the real register-tools. **Ask Soham before the first live call.**
 6. Push the branch only after Mike's main exists (see HISTORY.md), then rebase onto main.
-7. Final report must list: files, doc uncertainties, contracts drafts, and asks for Mike (PAL ID, key, does the PAL have a default face?), Jing (route path, one-line import of handleCreateConversation, style-outfit request body) and Arjun (window.shop per contracts/shop-bridge.ts).
+7. Final report must list: files, doc uncertainties, contracts drafts, and asks for Mike (PAL ID, key, does the PAL have a default face?, put "don't call style_outfit twice" plus the filler behaviour in the PAL prompt), Jing (route path, one-line import of handleCreateConversation, style-outfit request body incl. conversation_id for Session keying, and confirm the route returns the plan's looks[] shape) and Arjun (window.shop per contracts/shop-bridge.ts).
+8. Before the live 60–90 s test, verify the `conversation.respond` event name and its `properties.text` field in the Tavus docs ("Interactions protocol"). Background mode relies on them, and they are unverified.

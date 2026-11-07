@@ -22,6 +22,7 @@ export default function App() {
   const [config, setConfig] = useState<{ tavus_api_key: boolean; tavus_pal_id: boolean; style_outfit: string }>();
   const [conv, setConv] = useState<{ conversation_id: string; conversation_url: string } | null>(null);
   const [callState, setCallState] = useState("idle");
+  const [background, setBackground] = useState(false);
   const [custom, setCustom] = useState(() => JSON.stringify(toolCall("search_products", { query: "boots" }), null, 2));
 
   // Fake shop on window.shop, exactly where Arjun's page will put the real one.
@@ -36,13 +37,14 @@ export default function App() {
       createRouter({
         bridge: windowShop,
         styleOutfit: httpStyleOutfit("/api/style-outfit"),
+        styleOutfitMode: background ? "background" : "await",
         onLog: (e) => setLog((l) => [{ ...e, at: new Date().toLocaleTimeString() }, ...l].slice(0, 200)),
       }),
-    [],
+    [background],
   );
 
   const runMock = async (msg: unknown) => {
-    const result = await router.handle(msg);
+    const result = await router.handle(msg, (later) => console.log("[harness] pushed later", later));
     console.log("[harness] tool_result", result);
   };
 
@@ -94,20 +96,27 @@ export default function App() {
         {view.outfit && (
           <section className="outfit">
             <h2>
-              {view.outfit.outfit_name} <span className="muted">${view.outfit.total_usd}</span>
+              Outfit board <span className="muted small">lookbook: {view.outfit.lookbook_artifact || "none"}</span>
             </h2>
             <p>{view.outfit.spoken_summary}</p>
-            <div className="outfit-items">
-              {view.outfit.items.map((it) => {
-                const p = byId(it.product_id);
-                return (
-                  <div key={it.product_id} className="outfit-item">
-                    <b>{it.slot}</b> {p?.name ?? it.product_id}
-                    <div className="muted">{it.why}</div>
-                  </div>
-                );
-              })}
-            </div>
+            {view.outfit.looks.map((look, li) => (
+              <div key={li} className="look">
+                <h3>
+                  {look.outfit_name} <span className="muted">${look.total_usd}</span>
+                </h3>
+                <div className="outfit-items">
+                  {look.items.map((it, i) => {
+                    const p = it.product_id ? byId(it.product_id) : undefined;
+                    return (
+                      <div key={i} className={`outfit-item ${it.closet_item ? "owned" : ""}`}>
+                        <b>{it.slot}</b> {it.closet_item ? `${it.closet_item} (owned)` : (p?.name ?? `⚠ unknown ${it.product_id}`)}
+                        <div className="muted">{it.why}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </section>
         )}
 
@@ -167,6 +176,10 @@ export default function App() {
 
         <section className="panel">
           <h3>Mock tool calls</h3>
+          <label className="small">
+            <input type="checkbox" checked={background} onChange={(e) => setBackground(e.target.checked)} /> style_outfit
+            background mode (reply at once, push looks later)
+          </label>
           <div className="presets">
             {PRESETS.map((p) => (
               <button key={p.label} onClick={() => runMock(p.make())}>
