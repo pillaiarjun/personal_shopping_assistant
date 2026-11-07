@@ -5,20 +5,43 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "query": { "type": "string", "description": "Free text matched against title, brand, type and colour, e.g. 'linen shirt' or 'loafers'." },
-        "department": { "type": "string", "description": "One of: 'Suits & tuxedos', 'Shirts & tees', 'Knits & sweats', 'Trousers & denim', 'Shorts & swim', 'Outerwear', 'Shoes', 'Ties & formal extras', 'Accessories'. Loose names like 'suits' or 'shoes' also work." },
-        "style": { "type": "string", "description": "One of: 'Formal', 'Business Casual', 'Casual', 'Streetwear', 'Athletic'." },
-        "brand": { "type": "string", "description": "Brand name, only if the shopper named one." },
-        "color": { "type": "string", "description": "Colour, e.g. 'navy'." },
-        "max_price": { "type": "number", "description": "Maximum price per item in US dollars." },
-        "on_sale": { "type": "boolean", "description": "true to show only items on sale." }
+        "query": {
+          "type": "string",
+          "description": "Garment words matched against product names only, e.g. 'linen suit', 'loafers', 'oxford shirt'. Never put the occasion or place here ('wedding', 'Italy', 'beach'): that matches nothing. Use department, style and color for the rest."
+        },
+        "department": {
+          "type": "string",
+          "description": "One of: 'Suits & tuxedos', 'Shirts & tees', 'Knits & sweats', 'Trousers & denim', 'Shorts & swim', 'Outerwear', 'Shoes', 'Ties & formal extras', 'Accessories'. Loose names like 'suits' or 'shoes' also work."
+        },
+        "style": {
+          "type": "string",
+          "description": "One of: 'Formal', 'Business Casual', 'Casual', 'Streetwear', 'Athletic'."
+        },
+        "brand": {
+          "type": "string",
+          "description": "Brand name, only if the shopper named one."
+        },
+        "color": {
+          "type": "string",
+          "description": "Colour, e.g. 'navy'."
+        },
+        "max_price": {
+          "type": "number",
+          "description": "Maximum price per item in US dollars."
+        },
+        "on_sale": {
+          "type": "boolean",
+          "description": "true to show only items on sale."
+        }
       },
       "required": []
     },
     "origin": "llm",
     "on_call": "silent",
     "on_resolve": "generate_response",
-    "delivery": { "app_message": true }
+    "delivery": {
+      "app_message": true
+    }
   },
   {
     "name": "show_product",
@@ -26,14 +49,21 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "product_id": { "type": "string", "description": "Exact id from a tool result, e.g. 'MW-0001'." }
+        "product_id": {
+          "type": "string",
+          "description": "Exact id from a tool result, e.g. 'MW-0001'."
+        }
       },
-      "required": ["product_id"]
+      "required": [
+        "product_id"
+      ]
     },
     "origin": "llm",
     "on_call": "silent",
     "on_resolve": "generate_response",
-    "delivery": { "app_message": true }
+    "delivery": {
+      "app_message": true
+    }
   },
   {
     "name": "add_to_bag",
@@ -41,34 +71,67 @@
     "parameters": {
       "type": "object",
       "properties": {
-        "product_id": { "type": "string", "description": "Exact id of the confirmed product." },
-        "size": { "type": "string", "description": "Confirmed size as the product lists it, e.g. '40R', 'M', '10'. Omit only for one-size items." },
-        "color": { "type": "string", "description": "Confirmed colour, if the item comes in more than one." }
+        "product_id": {
+          "type": "string",
+          "description": "Exact id of the confirmed product."
+        },
+        "size": {
+          "type": "string",
+          "description": "Confirmed size as the product lists it, e.g. '40R', 'M', '10'. Omit only for one-size items."
+        },
+        "color": {
+          "type": "string",
+          "description": "Confirmed colour, if the item comes in more than one."
+        }
       },
-      "required": ["product_id"]
+      "required": [
+        "product_id"
+      ]
     },
     "origin": "llm",
     "on_call": "silent",
     "on_resolve": "generate_response",
-    "delivery": { "app_message": true }
+    "delivery": {
+      "app_message": true
+    }
   },
   {
     "name": "style_outfit",
-    "description": "Hand the brief to the styling agent, which builds three complete looks from the catalog and the shopper's closet and puts them on the outfit board. You need the event and the budget first. It is SLOW (about a minute) and the shopper can watch each step on screen: keep them company, never predict the result, and never call it again while it runs. To change one piece of the looks, call it again with the same occasion and budget plus rework_slot and rework_feedback. Returns the looks (names, totals, items by slot) and a spoken_summary to say in your own voice.",
+    "description": "Hand the brief to the styling agent, which builds three complete looks from the catalog and the shopper's closet and puts them on the outfit board. You need the event and the budget first. It is SLOW (about a minute) and the shopper can watch each step on screen. Usually this returns at once with started: true. Then keep the shopper company, never predict the result, and never call it again; the looks arrive in a later message marked [Stylist result]. When the looks arrive (or if this returns them directly), say spoken_summary in your own voice and ask which look the shopper likes. To change one piece of the looks, call it again with the same occasion and budget plus rework_slot and rework_feedback.",
     "parameters": {
       "type": "object",
       "properties": {
-        "occasion": { "type": "string", "description": "The event, e.g. 'summer wedding in Italy'." },
-        "budget_usd": { "type": "number", "description": "Total budget for this outfit in US dollars, as the shopper said it. Never above 10000." },
-        "notes": { "type": "string", "description": "Everything useful: dress code, season, location, colours, likes and dislikes, closet items to reuse, or that this is a second, separate outfit." },
-        "rework_slot": { "type": "string", "description": "Only when changing one piece: the slot to change, e.g. 'Shoes'." },
-        "rework_feedback": { "type": "string", "description": "Only when changing one piece: what's wrong with it, e.g. 'too formal'." }
+        "occasion": {
+          "type": "string",
+          "description": "The event, e.g. 'summer wedding in Italy'."
+        },
+        "budget_usd": {
+          "type": "number",
+          "description": "Total budget for this outfit in US dollars, as the shopper said it. Never above 10000."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Everything useful: dress code, season, location, colours, likes and dislikes, closet items to reuse, or that this is a second, separate outfit."
+        },
+        "rework_slot": {
+          "type": "string",
+          "description": "Only when changing one piece: the slot to change, e.g. 'Shoes'."
+        },
+        "rework_feedback": {
+          "type": "string",
+          "description": "Only when changing one piece: what's wrong with it, e.g. 'too formal'."
+        }
       },
-      "required": ["occasion", "budget_usd"]
+      "required": [
+        "occasion",
+        "budget_usd"
+      ]
     },
     "origin": "llm",
     "on_call": "generate_filler",
     "on_resolve": "generate_response",
-    "delivery": { "app_message": true }
+    "delivery": {
+      "app_message": true
+    }
   }
 ]

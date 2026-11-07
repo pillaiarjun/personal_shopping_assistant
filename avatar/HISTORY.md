@@ -50,3 +50,6 @@
   - Stylist events are read with fetch, not EventSource: Jing's server replays the run when a client reconnects.
   - One style_outfit runs at a time (the router refuses a second), on top of the prompt rule.
 - I caught add_to_cart vs the prompt's add_to_bag before registering. A test now checks every tool name appears in pal/system-prompt.md.
+- Jing's first real run took 59.8 s (validated ids). Per Jing, background mode is now the default. Tavus docs confirm `conversation.respond` {properties.text}, and say there's no hard timeout on app-message tool results (an unanswered one "eventually drops out of context"). Append/overwrite-context events exist, but their shapes weren't retrievable.
+- Mike: search_products query now says garment words only (q matches product names). The demo shopper was already sent as conversational_context.
+- Jing pasted a live ZooWork key in the group chat. It's not stored anywhere in avatar/. Suggested rotating it.

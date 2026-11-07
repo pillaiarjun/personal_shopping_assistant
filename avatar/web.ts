@@ -7,8 +7,8 @@
 // - Typed briefs (barn:brief) go to Sasha during a call, or straight to the stylist without one.
 //
 // Config (optional), set before this script loads:
-//   window.AVATAR_CONFIG = { backend: "https://...", styleOutfitMode: "background", shopperId: "demo-shopper" }
-// URL overrides: ?backend=http://localhost:8787  ?avatar_mode=background  ?avatar_debug=1 (mock tool-call panel)
+//   window.AVATAR_CONFIG = { backend: "https://...", styleOutfitMode: "await", shopperId: "demo-shopper" }  (default mode: background)
+// URL overrides: ?backend=http://localhost:8787  ?avatar_mode=await  ?avatar_debug=1 (mock tool-call panel)
 
 import Daily, { type DailyCall, type DailyEventObjectAppMessage, type DailyParticipant } from "@daily-co/daily-js";
 import { mountDebugPanel } from "./debug-panel";
@@ -35,7 +35,7 @@ const params = new URLSearchParams(location.search);
 const cfg: AvatarConfig = window.AVATAR_CONFIG ?? {};
 const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
 const backend = (params.get("backend") ?? cfg.backend ?? (isLocal ? "http://localhost:8787" : RAILWAY)).replace(/\/+$/, "");
-const mode = (params.get("avatar_mode") as AvatarConfig["styleOutfitMode"]) ?? cfg.styleOutfitMode ?? "await";
+const mode = (params.get("avatar_mode") as AvatarConfig["styleOutfitMode"]) ?? cfg.styleOutfitMode ?? "background"; // Jing: runs take ~40-60 s; don't hold the tool result
 
 const barn = (): Barn | undefined => window.Barn;
 const log: RouterLogEntry[] = [];

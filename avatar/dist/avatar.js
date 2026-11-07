@@ -6818,7 +6818,7 @@ function pu(t) {
   const r = Number((e[1] ?? e[3]).replace(/,/g, "")), n = /^(k|grand)$/i.test(e[2] ?? e[4] ?? "");
   return Number.isFinite(r) ? r * (n ? 1e3 : 1) : void 0;
 }
-const hu = "https://backend-production-6d9d.up.railway.app", Bn = new URLSearchParams(location.search), Rn = window.AVATAR_CONFIG ?? {}, fu = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname), _t = (Bn.get("backend") ?? Rn.backend ?? (fu ? "http://localhost:8787" : hu)).replace(/\/+$/, ""), wn = Bn.get("avatar_mode") ?? Rn.styleOutfitMode ?? "await", Ye = () => window.Barn, Pt = [], vr = cu({
+const hu = "https://backend-production-6d9d.up.railway.app", Bn = new URLSearchParams(location.search), Rn = window.AVATAR_CONFIG ?? {}, fu = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname), _t = (Bn.get("backend") ?? Rn.backend ?? (fu ? "http://localhost:8787" : hu)).replace(/\/+$/, ""), wn = Bn.get("avatar_mode") ?? Rn.styleOutfitMode ?? "background", Ye = () => window.Barn, Pt = [], vr = cu({
   bridge: Ye,
   shopperId: Rn.shopperId,
   styleOutfitMode: wn,
