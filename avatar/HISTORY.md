@@ -24,3 +24,12 @@
   - `response_to_user` and other extra args are ignored.
   - style_outfit times out after 45 s, then returns a speakable fallback error.
 - Not pushed yet: pushing the first branch to an empty GitHub repo would make it the default branch. Wait until Mike's main exists.
+
+## Team plan received (saved as avatar/TEAM_PLAN.md). Differences from what's built so far
+- **The stylist response shape changed.** The plan's shape is `{ looks: [{ outfit_name, items: [{ product_id? | closet_item?, slot, why }], total_usd }], spoken_summary, lookbook_artifact }`. contracts/stylist.ts, router style_outfit, mockStyleOutfit, fake-shop showOutfit and the harness outfit board all still use the old single-outfit shape. They need updating.
+- Products use ids like "jkt-001", and the category is singular ("jacket"). The slots are jacket, shirt, trousers and shoes. The stub catalog and mock slot map should follow this.
+- The pairing gate with Arjun is **12:30 PM** (the prompt said 1:15).
+- The "shoes too formal" rework is the same style_outfit tool with notes. Jing keeps one ZooWork Session per video call, so the style-outfit request may need conversation_id to key the session. Ask Jing.
+- Risk: Tavus may drop a slow tool result. The fallback is to return the style_outfit result immediately ("working on it") and push the looks later as a new message. Probably via conversation.respond or append-context; check the docs. Make it a router option, and test a 60–90 s call early.
+- Soham also owns: portal registration and submission form, scripted tests, a text-box fallback if video fails, the recording and the pitch.
+- The plan says to keep the contracts in a CLAUDE.md. Soham wants CLAUDE.md minimal, so the contracts stay in contracts/*.ts and TEAM_PLAN.md.

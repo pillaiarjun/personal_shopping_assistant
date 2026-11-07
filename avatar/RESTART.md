@@ -1,6 +1,6 @@
 # Restart here
 
-Resume prompt: "Read avatar/RESTART.md and avatar/HISTORY.md, then continue the avatar work."
+Resume prompt: "Read avatar/RESTART.md, avatar/HISTORY.md and avatar/TEAM_PLAN.md, then continue the avatar work."
 
 ## Done (committed on soham/avatar-skeleton)
 - contracts/ drafts: product.ts, stylist.ts, shop-bridge.ts (window.shop). All need sign-off.
@@ -9,6 +9,7 @@ Resume prompt: "Read avatar/RESTART.md and avatar/HISTORY.md, then continue the 
   - **Not yet installed, built or run.**
 
 ## Next steps
+0. Switch to the TEAM_PLAN stylist shape: `looks[]`, `closet_item`, `lookbook_artifact` (see HISTORY.md). Update contracts/stylist.ts, the router, the mock, fake-shop, App and the stub ids/categories. The Arjun pairing gate is 12:30 PM.
 1. `npm --prefix avatar/dev install`, then `npm --prefix avatar/dev run typecheck`, and fix errors.
 2. Write avatar/test/router.test.ts using node:test via tsx. Feed mocks for all 4 tools and assert:
    - the right bridge call
