@@ -15,7 +15,7 @@ import { mountDebugPanel } from "./debug-panel";
 import { createRouter, type RouterLogEntry, type ToolCallMessage } from "./router";
 import { parseBudget, stylistClient } from "./style-outfit";
 import type { Barn } from "./types";
-import { createWaitTalk } from "./wait-talk";
+import { createSpeechTracker, createWaitTalk } from "./wait-talk";
 
 const RAILWAY = "https://backend-production-6d9d.up.railway.app";
 
@@ -42,20 +42,13 @@ const barn = (): Barn | undefined => window.Barn;
 const log: RouterLogEntry[] = [];
 
 // Who's talking, so wait talk never cuts anyone off.
-const speaking = { user: false, replica: false };
-let lastSpeechAt = 0;
-function trackSpeech(data: unknown) {
-  const m = /^conversation\.(user|replica)\.(started|stopped)_speaking$/.exec(String((data as { event_type?: string })?.event_type));
-  if (!m) return;
-  speaking[m[1] as "user" | "replica"] = m[2] === "started";
-  lastSpeechAt = Date.now();
-}
+const speech = createSpeechTracker();
 
 const waitTalk = createWaitTalk({
   say: (text) => {
     if (conversationId) send({ message_type: "conversation", event_type: "conversation.respond", conversation_id: conversationId, properties: { text } });
   },
-  quietMs: (now) => (speaking.user || speaking.replica ? 0 : now - lastSpeechAt),
+  quietMs: (now) => speech.quietMs(now),
 });
 
 const runStylist = stylistClient({
@@ -173,7 +166,7 @@ function send(msg: unknown) {
 
 async function onAppMessage(ev?: DailyEventObjectAppMessage) {
   if (!ev) return;
-  trackSpeech(ev.data);
+  speech.track(ev.data, Date.now());
   const result = await router.handle(ev.data, send);
   if (result) send(result);
 }

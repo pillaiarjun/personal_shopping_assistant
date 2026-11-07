@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createWaitTalk, waitTalkText } from "../wait-talk";
+import { createSpeechTracker, createWaitTalk, waitTalkText } from "../wait-talk";
 
 function setup(quiet = 10_000) {
   const said: string[] = [];
@@ -53,5 +53,40 @@ describe("wait talk", () => {
 
   it("never names products", () => {
     assert.match(waitTalkText(undefined), /Don't name products or prices/);
+  });
+});
+
+describe("speech tracker (Tavus started/stopped_speaking events)", () => {
+  const ev = (type: string, role?: string) => ({ message_type: "conversation", event_type: type, properties: role ? { role } : {} });
+
+  it("reads the documented event names with properties.role", () => {
+    const t = createSpeechTracker();
+    t.track(ev("conversation.started_speaking", "user"), 1_000);
+    assert.equal(t.quietMs(5_000), 0, "user is talking");
+    t.track(ev("conversation.stopped_speaking", "user"), 6_000);
+    assert.equal(t.quietMs(9_000), 3_000);
+  });
+
+  it("treats pal and the legacy replica role as the same speaker", () => {
+    const t = createSpeechTracker();
+    t.track(ev("conversation.started_speaking", "pal"), 0);
+    t.track(ev("conversation.started_speaking", "replica"), 0);
+    t.track(ev("conversation.stopped_speaking", "pal"), 2_000);
+    t.track(ev("conversation.stopped_speaking", "replica"), 2_000);
+    assert.equal(t.quietMs(4_500), 2_500);
+  });
+
+  it("still accepts the older per-role names", () => {
+    const t = createSpeechTracker();
+    t.track(ev("conversation.replica.started_speaking"), 0);
+    assert.equal(t.quietMs(10_000), 0);
+    t.track(ev("conversation.replica.stopped_speaking"), 10_000);
+    assert.equal(t.quietMs(13_000), 3_000);
+  });
+
+  it("never reports a quiet moment before any speech event arrives", () => {
+    const t = createSpeechTracker();
+    t.track(ev("conversation.tool_call"), 0);
+    assert.equal(t.quietMs(60_000), 0);
   });
 });
