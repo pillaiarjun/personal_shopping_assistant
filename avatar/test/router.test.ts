@@ -326,7 +326,7 @@ describe("tools.json", () => {
   it("matches Sasha's prompt: names, on_call/on_resolve, required args", () => {
     const tools = JSON.parse(readFileSync(new URL("../tools.json", import.meta.url), "utf8"));
     const want: Record<string, [string, string, string[]]> = {
-      search_products: ["silent", "generate_response", []],
+      search_products: ["generate_filler", "generate_response", []],
       show_product: ["silent", "generate_response", ["product_id"]],
       add_to_bag: ["silent", "generate_response", ["product_id"]],
       style_outfit: ["generate_filler", "generate_response", ["occasion", "budget_usd"]],
