@@ -321,6 +321,10 @@ describe("style_outfit", () => {
     assert.match(text, /use the size listed here/);
     assert.match(text, /why the pieces in look 1 work together/);
     assert.match(text, /Look 1/);
+    // Every product id that made it into the message is whole (no "MW-01…" cut mid-id).
+    for (const id of text.match(/MW-\d+/g) ?? []) assert.match(id, /^MW-0\d{3}$/, id);
+    assert.ok(!text.endsWith("…"), "shrunk by whole pieces, not cut mid-text");
+    assert.match(text, /dollars: .*\.$/, "ends on a complete look");
   });
 
   it("instant only for the first look of a call; later requests run live", async () => {
