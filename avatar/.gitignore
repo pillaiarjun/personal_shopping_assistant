@@ -3,3 +3,8 @@
 !.env.example
 dev/node_modules/
 dev/dist/
+dev/node_modules/
+node_modules/
+dev/dist/
+*.log
+.DS_Store
