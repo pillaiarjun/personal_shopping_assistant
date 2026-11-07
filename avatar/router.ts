@@ -181,6 +181,8 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
 
   return {
     async search_products(raw, barn) {
+      // Sasha's prompt calls the text filter "q"; the tool schema calls it "query". Accept both.
+      if (raw && typeof raw === "object" && (raw as any).query == null && (raw as any).q != null) raw = { ...raw, query: (raw as any).q };
       const v = validate(raw, {
         query: { type: "string" },
         department: { type: "string" },

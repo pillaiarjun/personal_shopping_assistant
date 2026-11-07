@@ -6531,6 +6531,7 @@ function nu(t, e) {
   let u = !1;
   return {
     async search_products(p, g) {
+      p && typeof p == "object" && p.query == null && p.q != null && (p = { ...p, query: p.q });
       const v = er(p, {
         query: { type: "string" },
         department: { type: "string" },

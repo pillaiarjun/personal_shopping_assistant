@@ -121,6 +121,12 @@ describe("search_products", () => {
     for (const p of out(r).products) assert.deepEqual(Object.keys(p).sort(), ["brand", "id", "price", "title"]);
   });
 
+  it("accepts q (the prompt's name) as an alias for query", async () => {
+    const { router, calls } = setup();
+    ok(await router.handle(call("search_products", { q: "linen suit" })));
+    assert.deepEqual(calls[0], ["search", [{ q: "linen suit" }]]);
+  });
+
   it("hints when nothing matches", async () => {
     const { router } = setup();
     const r = await router.handle(call("search_products", { query: "zzzz" }));

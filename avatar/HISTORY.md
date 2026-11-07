@@ -53,3 +53,4 @@
 - Jing's first real run took 59.8 s (validated ids). Per Jing, background mode is now the default. Tavus docs confirm `conversation.respond` {properties.text}, and say there's no hard timeout on app-message tool results (an unanswered one "eventually drops out of context"). Append/overwrite-context events exist, but their shapes weren't retrievable.
 - Mike: search_products query now says garment words only (q matches product names). The demo shopper was already sent as conversational_context.
 - Jing pasted a live ZooWork key in the group chat. It's not stored anywhere in avatar/. Suggested rotating it.
+- Registered the 4 tools on the PAL with Soham's OK. Rebased onto the new main: Arjun's bag already has its own $10k check in Barn.addToBag (ours stays, before the call), and Jing mounts avatar routes when present. Mike's revised prompt calls the search text "q", so the router accepts q as an alias for query.
