@@ -17,7 +17,8 @@ Resume prompt: "Read avatar/RESTART.md, avatar/HISTORY.md and avatar/TEAM_PLAN.m
 - Known mock quirk: the mock's budget/3 rule makes all 3 looks reuse the same closet trousers and shoes. This is mock-only and doesn't matter.
 
 ## Next steps
-5. Before a live call: get the PAL ID and key from Mike, run `register-tools -- --dry`, then the real register-tools. **Ask Soham before the first live call.**
+5. `avatar/.env` exists, copied from .env.example on 2026-11-07. It's gitignored, and all values are still empty. Soham fills in TAVUS_API_KEY and TAVUS_PAL_ID from Mike in his editor. Never paste keys into chat and never print the values. Check them with awk for set/empty only. Restart the dev server after any edit.
+   Before a live call: get the PAL ID and key from Mike, run `register-tools -- --dry`, then the real register-tools. **Ask Soham before the first live call.**
 6. Push the branch only after Mike's main exists (see HISTORY.md), then rebase onto main.
 7. Final report must list: files, doc uncertainties, contracts drafts, and asks for Mike (PAL ID, key, does the PAL have a default face?, put "don't call style_outfit twice" plus the filler behaviour in the PAL prompt), Jing (route path, one-line import of handleCreateConversation, style-outfit request body incl. conversation_id for Session keying, and confirm the route returns the plan's looks[] shape) and Arjun (window.shop per contracts/shop-bridge.ts).
 8. Before the live 60–90 s test, verify the `conversation.respond` event name and its `properties.text` field in the Tavus docs ("Interactions protocol"). Background mode relies on them, and they are unverified.
