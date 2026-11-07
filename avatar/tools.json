@@ -1,0 +1,68 @@
+[
+  {
+    "name": "search_products",
+    "description": "Search the shop's menswear catalog and filter the product grid the shopper is looking at. Call this whenever the shopper describes something they want (an item, colour, budget or category). Returns up to 5 matches with id, name and price. Mention one to three of them by name; the full grid is already on screen, so never read out ids or the whole list.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "description": "Free-text description, e.g. 'linen shirt' or 'chelsea boots'." },
+        "category": { "type": "string", "description": "Product category if the shopper named one, e.g. 'shirts', 'trousers', 'shoes', 'outerwear', 'accessories'." },
+        "max_price": { "type": "number", "description": "Maximum price in US dollars." },
+        "color": { "type": "string", "description": "Colour, e.g. 'navy'." }
+      },
+      "required": []
+    },
+    "origin": "llm",
+    "on_call": "silent",
+    "on_resolve": "generate_response",
+    "delivery": { "app_message": true }
+  },
+  {
+    "name": "show_product",
+    "description": "Open one product's detail view on the shopper's screen. Use a product_id returned by search_products or style_outfit. Call it when the shopper asks to see, look at or hear more about a specific item. Returns the product's name, price, sizes and a one-line description.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "product_id": { "type": "string", "description": "Exact id from a previous search_products or style_outfit result." }
+      },
+      "required": ["product_id"]
+    },
+    "origin": "llm",
+    "on_call": "silent",
+    "on_resolve": "generate_response",
+    "delivery": { "app_message": true }
+  },
+  {
+    "name": "add_to_cart",
+    "description": "Add one product in one size to the shopper's cart. ONLY call this after you have asked the shopper out loud and they have explicitly said yes to adding this exact item in this exact size in their most recent turn. Never call it on your own initiative, from an implied interest, or for a whole outfit at once; if the size is unknown, ask for it first. Returns the new cart count and total, or a short reason it failed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "product_id": { "type": "string", "description": "Exact id of the product the shopper confirmed." },
+        "size": { "type": "string", "description": "Size the shopper confirmed, exactly as listed for the product, e.g. 'M' or '32x32'." }
+      },
+      "required": ["product_id", "size"]
+    },
+    "origin": "llm",
+    "on_call": "silent",
+    "on_resolve": "generate_response",
+    "delivery": { "app_message": true }
+  },
+  {
+    "name": "style_outfit",
+    "description": "Ask the in-house stylist to build a complete outfit from the catalog for an occasion, and show it as an outfit board on screen. Use it when the shopper wants a full look rather than a single item. This is SLOW (10 to 30 seconds): keep the conversation going while it runs, e.g. ask about colours they like or where they're going, and do not go silent or call it again. Returns the outfit name, the items by slot, the total price and a short summary to say out loud.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "occasion": { "type": "string", "description": "What the outfit is for, e.g. 'summer wedding guest' or 'first day at a new office job'." },
+        "budget_usd": { "type": "number", "description": "Total budget for the outfit in US dollars, if the shopper gave one." },
+        "notes": { "type": "string", "description": "Anything else the shopper said: colours, fit, items to avoid, items they already own." }
+      },
+      "required": ["occasion"]
+    },
+    "origin": "llm",
+    "on_call": "generate_filler",
+    "on_resolve": "generate_response",
+    "delivery": { "app_message": true }
+  }
+]
