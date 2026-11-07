@@ -6639,7 +6639,7 @@ function ou(t, e) {
         u = !0;
         let H;
         try {
-          H = await lu(t.styleOutfit(F), r);
+          H = await uu(t.styleOutfit(F), r);
         } catch (ce) {
           return t.onLog?.({ dir: "info", text: `style_outfit backend failed: ${ce.message}` }), Z("The stylist couldn't finish those looks. Say so plainly and offer to try again.");
         } finally {
@@ -6653,13 +6653,13 @@ function ou(t, e) {
         } catch (ce) {
           t.onLog?.({ dir: "info", text: `Barn.showLooks threw: ${ce.message}` });
         }
-        return { status: "success", output: { ...su(H), ...J }, trims: au };
+        return { status: "success", output: { ...au(H), ...J }, trims: cu };
       };
       if (n === "await" || !S.send)
         return n === "background" && a("[tool] style_outfit background mode needs a send function; awaiting instead"), te();
       const Le = S.send;
       return te().then((H) => {
-        const ce = H.status === "success" ? `[Stylist result, not said by the shopper] The looks are on the outfit board now: ${JSON.stringify(H.output)}. Say spoken_summary in your own voice and ask which look the shopper likes.` : `[Stylist result, not said by the shopper] ${H.output}`, kt = cu(S.conversationId, ce, c);
+        const ce = H.status === "success" ? su(H.output) : `STYLIST RESULT, not said by the shopper. ${H.output}`, kt = lu(S.conversationId, ce, c);
         t.onLog?.({ dir: "info", text: `style_outfit pushed ${H.status} via conversation.respond (${At(kt)}B)` });
         try {
           Le(kt);
@@ -6678,6 +6678,13 @@ function ou(t, e) {
   };
 }
 function su(t) {
+  const e = t.looks.map((r, n) => {
+    const o = (r.items ?? []).map((s) => "product_id" in s ? `${s.slot} is product_id ${s.product_id}` : `${s.slot} is his own ${s.closet_item}`).join("; ");
+    return `Look ${n + 1}, ${r.outfit_name}, ${r.total_usd} dollars: ${o}.`;
+  });
+  return `STYLIST RESULT, not said by the shopper. The looks are on the outfit board now. spoken_summary: ${t.spoken_summary} ${e.join(" ")} Say spoken_summary in your own voice and ask which look the shopper likes.`;
+}
+function au(t) {
   return {
     spoken_summary: t.spoken_summary,
     looks: t.looks.map((e) => ({
@@ -6689,7 +6696,7 @@ function su(t) {
     }))
   };
 }
-const au = [
+const cu = [
   { label: "short summary", apply: (t) => ({ ...t, spoken_summary: ft(t.spoken_summary ?? "", 300) }) },
   {
     label: "short names",
@@ -6698,7 +6705,7 @@ const au = [
   ...qs("looks"),
   { label: "drop items", apply: (t) => ({ ...t, looks: t.looks.map(({ items: e, ...r }) => r) }) }
 ];
-function cu(t, e, r) {
+function lu(t, e, r) {
   const n = (s) => ({
     message_type: "conversation",
     event_type: "conversation.respond",
@@ -6710,7 +6717,7 @@ function cu(t, e, r) {
     e = e.slice(0, Math.floor(e.length * 0.8)), o = n(e + "…");
   return o;
 }
-function lu(t, e) {
+function uu(t, e) {
   let r;
   return Promise.race([
     t,
@@ -6719,7 +6726,7 @@ function lu(t, e) {
     })
   ]).finally(() => clearTimeout(r));
 }
-function uu(t) {
+function du(t) {
   const r = ou(t, /* @__PURE__ */ new Map()), n = t.logger ?? ((u) => console.log(u)), o = t.trimThresholdBytes ?? Js, s = typeof t.bridge == "function" ? t.bridge : () => t.bridge, a = /* @__PURE__ */ new Set();
   async function c(u, p) {
     if (!nu(u)) return null;
@@ -6763,9 +6770,9 @@ function uu(t) {
   }
   return { handle: c };
 }
-const du = 12e4;
-function pu(t) {
-  const e = t.baseUrl.replace(/\/+$/, ""), r = t.fetchImpl ?? ((...o) => fetch(...o)), n = t.timeoutMs ?? du;
+const pu = 12e4;
+function hu(t) {
+  const e = t.baseUrl.replace(/\/+$/, ""), r = t.fetchImpl ?? ((...o) => fetch(...o)), n = t.timeoutMs ?? pu;
   return async (o) => {
     const s = AbortSignal.timeout(n), a = await r(`${e}/api/stylist/run`, {
       method: "POST",
@@ -6782,7 +6789,7 @@ function pu(t) {
       signal: s
     });
     if (!u.ok || !u.body) throw new Error(`stylist events ${u.status}`);
-    for await (const p of hu(u.body))
+    for await (const p of fu(u.body))
       if (p.type === "step") t.onStep?.({ id: p.id, label: p.label, status: p.status });
       else {
         if (p.type === "error") throw new Error(`stylist: ${p.message}`);
@@ -6794,7 +6801,7 @@ function pu(t) {
     throw new Error("stylist stream ended without a result");
   };
 }
-async function* hu(t) {
+async function* fu(t) {
   const e = t.getReader(), r = new TextDecoder();
   let n = "";
   try {
@@ -6820,17 +6827,17 @@ async function* hu(t) {
     });
   }
 }
-function fu(t) {
+function gu(t) {
   const e = t.match(/\$\s?(\d[\d,]*(?:\.\d+)?)\s*(k)?|(\d[\d,]*(?:\.\d+)?)\s*(k|grand|bucks|dollars|usd)\b/i);
   if (!e) return;
   const r = Number((e[1] ?? e[3]).replace(/,/g, "")), n = /^(k|grand)$/i.test(e[2] ?? e[4] ?? "");
   return Number.isFinite(r) ? r * (n ? 1e3 : 1) : void 0;
 }
-function gu(t) {
-  return `[Stylist update, not said by the shopper] ${t ? `The styling agent is on this step: "${t}".` : "The styling agent is still working."} Give it a quick nod, then keep your show going: carry on with your story, or start your next bit. Don't name products or prices.`;
-}
 function mu(t) {
-  const e = t.firstMs ?? 15e3, r = t.everyMs ?? 15e3, n = t.maxUpdates ?? 4, o = t.quietNeededMs ?? 2500;
+  return `STYLIST UPDATE, not said by the shopper. ${t ? `The styling agent is on this step: "${t}".` : "The styling agent is still working."} Give it a quick nod, then keep your show going: carry on with your story, or start your next bit. Don't name products or prices.`;
+}
+function vu(t) {
+  const e = t.firstMs ?? 1e4, r = t.everyMs ?? 15e3, n = t.maxUpdates ?? 4, o = t.quietNeededMs ?? 2500;
   let s = !1, a = 0, c = 0, u;
   return {
     start(p) {
@@ -6844,11 +6851,11 @@ function mu(t) {
     },
     /** Call about once a second while a run is going. */
     tick(p) {
-      !s || c >= n || p < a || t.quietMs(p) < o || (t.say(gu(u)), c += 1, a = p + r);
+      !s || c >= n || p < a || t.quietMs(p) < o || (t.say(mu(u)), c += 1, a = p + r);
     }
   };
 }
-function vu() {
+function yu() {
   const t = { user: !1, pal: !1 };
   let e = 0, r = !1;
   return {
@@ -6870,18 +6877,18 @@ function vu() {
     }
   };
 }
-const yu = "https://backend-production-6d9d.up.railway.app", $n = new URLSearchParams(location.search), Vn = window.AVATAR_CONFIG ?? {}, bu = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname), _t = ($n.get("backend") ?? Vn.backend ?? (bu ? "http://localhost:8787" : yu)).replace(/\/+$/, ""), En = $n.get("avatar_mode") ?? Vn.styleOutfitMode ?? "background", Ze = () => window.Barn, xt = [], zs = vu(), lr = mu({
+const bu = "https://backend-production-6d9d.up.railway.app", $n = new URLSearchParams(location.search), Vn = window.AVATAR_CONFIG ?? {}, _u = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname), _t = ($n.get("backend") ?? Vn.backend ?? (_u ? "http://localhost:8787" : bu)).replace(/\/+$/, ""), En = $n.get("avatar_mode") ?? Vn.styleOutfitMode ?? "background", Ze = () => window.Barn, xt = [], zs = yu(), lr = vu({
   say: (t) => {
     Te && wr({ message_type: "conversation", event_type: "conversation.respond", conversation_id: Te, properties: { text: t } });
   },
   quietMs: (t) => zs.quietMs(t)
-}), _u = pu({
+}), wu = hu({
   baseUrl: _t,
   onStart: () => Ze()?.resetFeed(),
   onStep: (t) => {
     Ze()?.addFeedStep(t), t.status === "start" && lr.step(t.label);
   }
-}), _r = uu({
+}), _r = du({
   bridge: Ze,
   shopperId: Vn.shopperId,
   styleOutfitMode: En,
@@ -6889,7 +6896,7 @@ const yu = "https://backend-production-6d9d.up.railway.app", $n = new URLSearchP
     lr.start(Date.now());
     const e = setInterval(() => lr.tick(Date.now()), 1e3);
     try {
-      return await _u(t);
+      return await wu(t);
     } finally {
       clearInterval(e), lr.stop();
     }
@@ -6946,7 +6953,7 @@ function wr(t) {
       console.error("[avatar] sendAppMessage failed", e);
     }
 }
-async function wu(t) {
+async function ku(t) {
   if (!t) return;
   zs.track(t.data, Date.now());
   const e = await _r.handle(t.data, wr);
@@ -6959,7 +6966,7 @@ async function Hs() {
       await Ze()?.ready;
       const t = await fetch(`${_t}/api/conversation`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }), e = await t.json().catch(() => ({}));
       if (!t.ok) throw new Error(e.error ?? `HTTP ${t.status}`);
-      Te = e.conversation_id, $o.getCallInstance()?.destroy(), Ie = $o.createCallObject({ subscribeToTracksAutomatically: !0 }), Ie.on("app-message", wu).on("participant-joined", ut).on("participant-updated", ut).on("participant-left", ut).on("track-started", ut).on("track-stopped", ut).on("left-meeting", () => {
+      Te = e.conversation_id, $o.getCallInstance()?.destroy(), Ie = $o.createCallObject({ subscribeToTracksAutomatically: !0 }), Ie.on("app-message", ku).on("participant-joined", ut).on("participant-updated", ut).on("participant-left", ut).on("track-started", ut).on("track-stopped", ut).on("left-meeting", () => {
         ur("Call ended.");
       }).on("error", (r) => {
         ur(`Call error: ${r?.errorMsg ?? "unknown"}`, !0);
@@ -7000,7 +7007,7 @@ addEventListener("pagehide", () => {
     new Blob([JSON.stringify({ conversation_id: Te })], { type: "application/json" })
   );
 });
-let ku = 0;
+let Su = 0;
 addEventListener("barn:brief", async (t) => {
   const e = String(t.detail?.text ?? "").trim();
   if (!e) return;
@@ -7008,7 +7015,7 @@ addEventListener("barn:brief", async (t) => {
     wr({ message_type: "conversation", event_type: "conversation.respond", conversation_id: Te, properties: { text: e } });
     return;
   }
-  const r = fu(e);
+  const r = gu(e);
   if (!r) {
     Ze()?.resetFeed(), Ze()?.addFeedStep({ id: "budget", label: "Add a budget so I can build looks, e.g. “about $800”.", status: "blocked" });
     return;
@@ -7020,7 +7027,7 @@ addEventListener("barn:brief", async (t) => {
     properties: {
       name: "style_outfit",
       arguments: { occasion: e, budget_usd: r, notes: "Typed brief, no video call." },
-      tool_call_id: `typed_${++ku}`
+      tool_call_id: `typed_${++Su}`
     }
   }, o = await _r.handle(n);
   o?.properties.status === "error" && Ze()?.addFeedStep({ id: "error", label: String(o.properties.output), status: "blocked" });

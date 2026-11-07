@@ -350,7 +350,7 @@ describe("tools.json", () => {
       search_products: ["generate_filler", "generate_response", []],
       show_product: ["silent", "generate_response", ["product_id"]],
       add_to_bag: ["silent", "generate_response", ["product_id"]],
-      style_outfit: ["generate_filler", "generate_response", ["occasion", "budget_usd"]],
+      style_outfit: ["generate_filler", "add_to_context", ["occasion", "budget_usd"]],
     };
     assert.deepEqual(tools.map((t: any) => t.name).sort(), Object.keys(want).sort());
     const prompt = readFileSync(new URL("../../pal/system-prompt.md", import.meta.url), "utf8");

@@ -358,8 +358,8 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
       void run().then((r) => {
         const text =
           r.status === "success"
-            ? `[Stylist result, not said by the shopper] The looks are on the outfit board now: ${JSON.stringify(r.output)}. Say spoken_summary in your own voice and ask which look the shopper likes.`
-            : `[Stylist result, not said by the shopper] ${r.output}`;
+            ? stylistResultText(r.output as ReturnType<typeof compactStylist>)
+            : `STYLIST RESULT, not said by the shopper. ${r.output}`;
         const msg = fitRespond(ctx.conversationId, text, threshold);
         opts.onLog?.({ dir: "info", text: `style_outfit pushed ${r.status} via conversation.respond (${byteLength(msg)}B)` });
         try {
@@ -381,6 +381,18 @@ function makeHandlers(opts: RouterOptions, prices: Map<string, number>): Record<
 }
 
 // ---- stylist result compaction ----
+
+// Plain text with no square brackets or JSON: Tavus strips bracketed text from these
+// messages, which removed the looks' items and left Sasha with no product ids.
+export function stylistResultText(o: ReturnType<typeof compactStylist>): string {
+  const looks = o.looks.map((l, n) => {
+    const items = (l.items ?? [])
+      .map((it) => ("product_id" in it ? `${it.slot} is product_id ${it.product_id}` : `${it.slot} is his own ${it.closet_item}`))
+      .join("; ");
+    return `Look ${n + 1}, ${l.outfit_name}, ${l.total_usd} dollars: ${items}.`;
+  });
+  return `STYLIST RESULT, not said by the shopper. The looks are on the outfit board now. spoken_summary: ${o.spoken_summary} ${looks.join(" ")} Say spoken_summary in your own voice and ask which look the shopper likes.`;
+}
 
 function compactStylist(res: StylistResult) {
   return {
