@@ -146,9 +146,7 @@
       // A run-level failure (Soham's typed-brief path posts it as id "error") means nothing else is still running.
       if (id === "error" && status === "blocked") Barn.stopFeed();
       paintRow(row);
-      const box = list.closest(".stylist-feed");
-      box.hidden = false;
-      box.scrollTop = box.scrollHeight; // the feed scrolls inside the panel; keep the newest step in view
+      list.closest(".stylist-feed").hidden = false;
       return { ok: true };
     },
 
