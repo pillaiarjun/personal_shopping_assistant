@@ -13,7 +13,7 @@ describe("wait talk", () => {
   it("stays silent before the first update is due", () => {
     const { said, talk } = setup();
     talk.start(0);
-    talk.tick(11_000);
+    talk.tick(14_000);
     assert.equal(said.length, 0);
   });
 
@@ -22,7 +22,7 @@ describe("wait talk", () => {
     talk.start(0);
     talk.step("Checking your closet");
     talk.step("Searching the catalog");
-    talk.tick(12_000);
+    talk.tick(15_000);
     assert.deepEqual(said, [waitTalkText("Searching the catalog")]);
   });
 
@@ -36,10 +36,10 @@ describe("wait talk", () => {
   it("waits for a quiet moment", () => {
     const { said, talk, setQuiet } = setup(0);
     talk.start(0);
-    talk.tick(12_000);
+    talk.tick(15_000);
     assert.equal(said.length, 0);
     setQuiet(3_000);
-    talk.tick(13_000);
+    talk.tick(16_000);
     assert.equal(said.length, 1);
   });
 

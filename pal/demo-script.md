@@ -13,7 +13,7 @@ Say Alex's lines as written. Sasha's replies are live, so they'll vary. The phra
 | 3 | "That's right. I've got about fifteen hundred dollars, and I was thinking a tuxedo." | `search_products` for "tuxedo outfit". Ten full tuxedos appear. | Backs the idea, then asks if she can show something lighter for summer in Italy. |
 | 4 | "Sure, show me." | `search_products` for "linen suit", then `show_product` opens the Ink Blue Double Breasted Linen Suit (MW-0374, $595). | One reason linen works for the heat, and asks what Alex thinks. |
 | 5 | "Okay, I like that. Build me a full look around it." | `style_outfit` starts. The activity feed shows each step. | Says it's working and points to the feed. |
-| 6 | *(While the feed runs, play along with Sasha.)* When she invites it: "Okay, rate what I've got on." | The feed keeps running. Sasha reacts to real steps from the agent, and reviews your outfit on camera. | One line on each step, plus a score out of ten for your outfit. |
+| 6 | *(While the feed runs, play along with Sasha.)* "Wait, where's he taking you?" | The feed keeps running. Sasha nods to real steps from the agent between bits. | Says she's working in the background, then tells a story about Kevin, her AI boyfriend. |
 | 6b | *(Let her finish.)* | Two or three looks appear on the outfit board, reusing Alex's closet. | Gives the `spoken_summary` and asks which look Alex likes. |
 | 7 | "I like the first one, but those shoes are too formal." | `style_outfit` swaps only the shoes. | Says she's swapping that piece and it'll be quicker. |
 | 8 | "Perfect. I'll take the suit." | `show_product` opens the suit. | "You're a forty regular, right?" |
@@ -38,4 +38,4 @@ Say Alex's lines as written. Sasha's replies are live, so they'll vary. The phra
 - All four tools are attached to the PAL, and the catalog is uploaded to ZooWork.
 - Do one full run first, and time it. Each `style_outfit` run takes about 40 to 45 seconds, and can return two looks instead of three.
 - If it runs long, cut step 10 first, then step 7. Never cut steps 5 and 6.
-- Keep the outfit rating in step 6 only if it worked well in rehearsal. If it didn't, answer one of Sasha's questions instead.
+- If Sasha's story runs out during step 6, say "Rate what I've got on." It's a good camera moment, so keep it if it works in rehearsal.

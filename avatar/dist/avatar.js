@@ -6826,10 +6826,10 @@ function gu(t) {
   return Number.isFinite(r) ? r * (n ? 1e3 : 1) : void 0;
 }
 function mu(t) {
-  return `[Stylist update, not said by the shopper] ${t ? `The styling agent is on this step: "${t}".` : "The styling agent is still working."} Keep him company in one or two short sentences. Don't name products or prices.`;
+  return `[Stylist update, not said by the shopper] ${t ? `The styling agent is on this step: "${t}".` : "The styling agent is still working."} Give it a quick nod, then keep your show going: carry on with your story, or start your next bit. Don't name products or prices.`;
 }
 function vu(t) {
-  const e = t.firstMs ?? 12e3, r = t.everyMs ?? 14e3, n = t.maxUpdates ?? 4, o = t.quietNeededMs ?? 2500;
+  const e = t.firstMs ?? 15e3, r = t.everyMs ?? 15e3, n = t.maxUpdates ?? 4, o = t.quietNeededMs ?? 2500;
   let s = !1, a = 0, c = 0, u;
   return {
     start(p) {
