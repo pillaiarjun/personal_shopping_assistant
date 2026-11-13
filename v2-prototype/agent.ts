@@ -131,6 +131,12 @@ export default defineAgent({
         userStoppedAt = 0;
       }
     });
+    // --- Transcript: both sides of the conversation, so stalls can be traced.
+    session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
+      const item = ev.item as any;
+      const text = item.textContent ?? '';
+      if (text && (item.role === 'user' || item.role === 'assistant')) log(`${item.role === 'user' ? 'YOU' : 'SASHA'}: ${text}`);
+    });
     session.on(voice.AgentSessionEventTypes.MetricsCollected, (ev) => {
       const m = ev.metrics as any;
       if (m.type === 'avatar_metrics' || m.type === 'realtime_model_metrics') {
