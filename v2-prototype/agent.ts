@@ -17,6 +17,7 @@ import sharp from 'sharp';
 import { Session as GenAISession } from '@google/genai';
 import dotenv from 'dotenv';
 import { writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 dotenv.config({ path: '.env.local' });
@@ -27,12 +28,8 @@ const VISION = (process.env.VISION ?? 'on') !== 'off';
 const VOICE = process.env.GEMINI_VOICE ?? 'Aoede';
 const FRAME_WIDTH = Number(process.env.FRAME_WIDTH ?? 768);
 
-const INSTRUCTIONS = `You are Sasha, a warm, witty personal stylist at The Fashion Barn.
-Keep replies short and natural, like a real conversation: one or two sentences, then a question.
-Speak at a relaxed, unhurried pace, calm and friendly, never rushed.
-No lists, no emojis, no stage directions.
-You can see the shopper live through their camera. Describe only what is clearly visible right now.
-If you can't see them, or the picture is dark or blurry, say so and ask them to step into the light. Never guess at age, weight or body type.`;
+// Sasha's personality, adapted from pal/system-prompt.md for Gemini Live (no store tools yet).
+const INSTRUCTIONS = readFileSync(new URL('./sasha-prompt.md', import.meta.url), 'utf8');
 
 // Gemini Live takes camera frames on its `video` input. The plugin sends them as `media`,
 // which gemini-3.8-live ignores (tested), so re-label image chunks as video.
@@ -201,7 +198,7 @@ export default defineAgent({
       log('room tracks\n   ' + lines.join('\n   '));
     };
     setTimeout(roomReport, 12000);
-    session.generateReply({ instructions: 'Greet the shopper in one short sentence and ask what brings them in.' });
+    session.generateReply({ instructions: 'Introduce yourself as Sasha in one short, warm line with a bit of attitude, then ask their name.' });
   },
 });
 

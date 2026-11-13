@@ -15,6 +15,6 @@ A small test of the Gemini hackathon setup: Gemini Live is Sasha's voice, brain 
 - **Vision:** camera frames have to go into Gemini Live's `video` input. The LiveKit Node plugin sends them as `media`, which gemini-3.8-live ignores, so `agent.ts` patches that. LiveKit Inference drops images, so use your own Google key (`GEMINI=google`).
 - **Speed:** Gemini starts answering in about 0.2–1.2 s. The long pauses came from turn-taking and from speaker echo making her interrupt herself. Set to low start sensitivity, high end sensitivity and 500 ms of silence.
 - **Google free tier:** it limits how many live sessions can run at once. Turn on billing before the hackathon.
-- **Personality:** still a short stand-in. The real Sasha prompt in `pal/system-prompt.md` hasn't been ported yet.
+- **Personality:** `sasha-prompt.md` is the real Sasha prompt from `pal/system-prompt.md`, adapted for Gemini: same attitude at a calmer pace, store tools taken out for now, camera review rules kept.
 
 `tests/` has the vision and voice tests. `casting/index.html` is the page used to compare voices; the audio clips are not in git.
