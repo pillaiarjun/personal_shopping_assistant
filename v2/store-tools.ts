@@ -146,6 +146,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     }
     return undefined;
   }
+  const heardAt = new Map<string, number>(); // when she was handed it
   const heard = new Map<string, number>(); // "MW-0383:L" -> his turn count when she was told to read it back (or offered it)
   let lastBuild: { budget: number; at: number; run: Promise<unknown> } | null = null;
   async function buildAndShow({ occasion, budget_usd, gender, notes }: { occasion: string; budget_usd: number; gender: 'men' | 'women'; notes?: string }) {
@@ -419,7 +420,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
         const spell = (n: number) => (n < 15 ? NUM[n] : n < 20 ? ['fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'][n - 15] : n < 100 ? `${TENS[Math.floor(n / 10)]}${n % 10 ? ` ${NUM[n % 10]}` : ''}` : String(n));
         const forms = (size: string) => {
-          const low = size.toLowerCase();
+          const low = size.toLowerCase().replace(/extra[- ]?large/, 'xl').replace(/extra[- ]?small/, 'xs').replace(/\blarge\b/, 'l').replace(/\bmedium\b/, 'm').replace(/\bsmall\b/, 's');
           const out: string[] = [];
           const letter = low.match(/\b(xxs|xs|s|m|l|xl|xxl|xxxl)\b/);
           if (letter) out.push(letter[1], WORDS[letter[1]] ?? '');
@@ -434,9 +435,12 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         };
         const recent = (hooks?.flow?.said ?? []).filter((x) => x.turn <= turns).slice(-4).map((x) => ` ${x.text.toLowerCase().replace(/[^a-z0-9. ]+/g, ' ')} `);
         const saidIt = (size?: string) => !size || recent.some((t) => forms(size).some((f) => new RegExp(`(^|[^a-z0-9.])${f.replace('.', '\\.')}(?! (one|two|three|four|five|six|seven|eight|nine)\\b)([^a-z0-9]|$)`).test(t.replace(/-/g, ' '))));
-        const unheard = items.filter((it) => byId[it.product_id] && !((heard.get(pair(it)) ?? Infinity) < turns) && !saidIt(it.size));
+        // Loop breaker: if she was already handed this piece to read back a few seconds ago and calls again saying
+        // he confirmed, let it through. One read-back round at most, never a loop.
+        const handedAt = new Map<string, number>(heardAt);
+        const unheard = items.filter((it) => byId[it.product_id] && !((heard.get(pair(it)) ?? Infinity) < turns) && !saidIt(it.size) && !(Date.now() - (handedAt.get(pair(it)) ?? Infinity) > 3000));
         if (unheard.length) {
-          for (const it of unheard) if (!heard.has(pair(it))) heard.set(pair(it), turns);
+          for (const it of unheard) if (!heard.has(pair(it))) { heard.set(pair(it), turns); heardAt.set(pair(it), Date.now()); }
           const say = unheard.map((it) => `${it.size ?? 'one size'} ${brief(byId[it.product_id]).title}`).join(', ');
           const left = outfit_number ? outfits[outfit_number - 1]?.items.filter((o) => !items.some((it) => it.product_id === o.product_id)).map((o) => brief(byId[o.product_id]).title) : [];
           return { ok: false, left_out_of_this_call: left?.length ? left : undefined, not_yet: `Nothing is in his bag yet. Never tell him it is, even if he asks: that would be a lie he sees on screen. Read this back to him in your own words and wait for his yes: ${say}. When he says yes, call add_to_bag again with the same pieces and sizes.` };

@@ -280,27 +280,23 @@ export default defineAgent({
     let userStoppedAt = 0;
     // His words as they're heard. A stretch of "him talking" with no words in it was noise, not a turn.
     let userStartedAt = 0, wordsAt = 0, answeredStop = 0;
-    // His words so far this turn (the transcript may come in pieces or whole; either way keep the full line).
-    let hisTurnAt = 0;
-    const hearHim = (t: string) => {
-      if (hisTurnAt !== userStartedAt) { hisTurnAt = userStartedAt; flow.his = ''; }
-      flow.his = t.startsWith(flow.his) ? t : `${flow.his} ${t}`.trim();
-    };
+    // His turns come from his transcribed words, not the plugin's speech events: those mostly came from the
+    // fake barge-ins we now drop, so without them his turns stopped counting and the bag read-back looped.
+    // A turn opens with his first words and closes ~1.2 s after his last ones (or when his line is final).
+    let hisTurnOpen = false;
+    const openTurn = () => { if (!hisTurnOpen) { hisTurnOpen = true; userStartedAt = Date.now(); flow.his = ''; if (agentState === 'speaking') record('interrupted', {}); } };
+    const closeTurn = () => { if (hisTurnOpen) { hisTurnOpen = false; flow.userTurns++; userStoppedAt = wordsAt; } };
+    const hearHim = (t: string) => { openTurn(); flow.his = t.startsWith(flow.his) ? t : `${flow.his} ${t}`.trim(); };
+    const turnClock = setInterval(() => { if (hisTurnOpen && Date.now() - wordsAt > 1200) closeTurn(); userSpeaking = hisTurnOpen || speechState; }, 100);
+    ctx.addShutdownCallback(async () => clearInterval(turnClock));
+    let speechState = false;
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => { if (ev.transcript.trim().length > 1) { wordsAt = Date.now(); hearHim(ev.transcript); } });
-    session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
-      if (ev.newState === 'speaking') { userStartedAt = Date.now(); }
-      userSpeaking = ev.newState === 'speaking';
-      if (userSpeaking && agentState === 'speaking') record('interrupted', {});
-      // No reminder here: a flicker of noise also looks like "he stopped talking". The reminder waits for
-      // his actual words (the transcript below), so it never fires while he's still thinking of an answer.
-      // Blips of a few ms (the detector flickering) aren't a turn: ignore anything under 250 ms.
-      if (ev.oldState === 'speaking' && Date.now() - userStartedAt >= 250) { flow.userTurns++; userStoppedAt = Date.now(); }
-    });
+    session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => { speechState = ev.newState === 'speaking'; userSpeaking = hisTurnOpen || speechState; });
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       agentState = ev.newState;
       record('sasha_state', { state: ev.newState });
-      if (ev.newState === 'speaking') { owed = null; herLastStart = Date.now(); }
       if (ev.oldState === 'speaking') herLastStop = Date.now();
+      if (ev.newState === 'speaking') { owed = null; herLastStart = Date.now(); }
       else if (pendingNotes.length) for (const n of pendingNotes.splice(0)) quietNote(n);
       if (ev.newState === 'speaking' && userStoppedAt) {
         log(`reply started ${Date.now() - userStoppedAt} ms after you stopped`);
@@ -315,7 +311,7 @@ export default defineAgent({
         log(`${item.role === 'user' ? 'YOU' : 'SASHA'}: ${text}`);
         record(item.role === 'user' ? 'you' : 'sasha', { text, interrupted: item.interrupted || undefined });
         if (item.role === 'assistant') { heardHerSay(text); flow.said.push({ text, turn: flow.userTurns }); }
-        if (item.role === 'user') { flow.his = text; flow.hisLines = [...flow.hisLines, text].slice(-4); }
+        if (item.role === 'user') { closeTurn(); flow.his = text; flow.hisLines = [...flow.hisLines, text].slice(-4); }
         if (item.role === 'user' && text.trim().split(/\s+/).length <= 6 && /^(that'?s it|no,? (i think )?we'?re good|thanks|thank you|bye)[.!, ]*(for (now|today|everything))?[.!]*$/i.test(text.trim())) flow.done.add('closing');
       }
     });
