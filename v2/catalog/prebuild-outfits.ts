@@ -13,7 +13,7 @@ dotenv.config({ path: '.env.local', quiet: true }); // run from v2/
 if (process.env.PREBUILD_KEY === 'paid') process.env.GOOGLE_API_KEY = process.env.GOOGLE_TRYON_API_KEY;
 process.env.OUTFIT_FALLBACK_MODELS = ''; // Hydrogen only: no quiet fallback to a smaller model
 const MODEL = process.env.PREBUILD_MODEL ?? 'gemini-4-hydrogen';
-const { buildOutfits, embedOccasion } = await import('../store.ts');
+const { buildOutfits, embedOccasion, hasAccessory, MAX_PIECES } = await import('../store.ts');
 
 const OCCASIONS = [
   'dinner date',
@@ -32,7 +32,9 @@ const GENDERS = ['men', 'women'] as const;
 
 const FILE = new URL('./outfit-library.json', import.meta.url);
 const fresh = process.argv.includes('--fresh');
-const entries: LibraryEntry[] = !fresh && existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')).entries : [];
+// Entries made under older rules (no accessory, or more than six pieces) are rebuilt.
+const entries: LibraryEntry[] = (!fresh && existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')).entries as LibraryEntry[] : [])
+  .filter((e) => e.outfits.every((o) => hasAccessory(o) && o.items.length <= MAX_PIECES));
 const save = () => writeFileSync(FILE, JSON.stringify({ made_with: MODEL, entries }, null, 0).replace(/\{"occasion"/g, '\n{"occasion"') + '\n');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

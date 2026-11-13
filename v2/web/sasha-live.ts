@@ -128,12 +128,30 @@ function place() {
   document.body.classList.toggle('sl-nobar', !docked);
   stage.classList.toggle('sl-docked', docked);
   stage.classList.toggle('sl-corner', !docked);
-  if (!docked) return stage.removeAttribute('style');
-  const r = slot!.getBoundingClientRect();
-  Object.assign(stage.style, { top: `${r.top}px`, left: `${r.left}px`, width: `${r.width}px`, height: `${Math.max(r.height, 240)}px` });
+  if (!docked) stage.removeAttribute('style');
+  else {
+    const r = slot!.getBoundingClientRect();
+    Object.assign(stage.style, { top: `${r.top}px`, left: `${r.left}px`, width: `${r.width}px`, height: `${Math.max(r.height, 240)}px` });
+  }
+  clearBag();
 }
 addEventListener('resize', place);
 wide.addEventListener('change', place);
+
+// The bag drawer slides in on the same side as Sasha. Keep her on top in her own space and start the
+// bag's contents below her (or above her, when she sits in the bottom corner on small screens).
+const bag = document.getElementById('bag-drawer');
+function clearBag() {
+  if (!bag) return;
+  bag.style.paddingTop = bag.style.paddingBottom = '';
+  if (!stage || !shrunk || bag.hidden) return;
+  const s = stage.getBoundingClientRect();
+  const b = bag.getBoundingClientRect();
+  if (s.right <= b.left || s.left >= b.right) return; // not over the bag
+  if (stage.classList.contains('sl-corner')) bag.style.paddingBottom = `${innerHeight - s.top + 16}px`;
+  else bag.style.paddingTop = `${s.bottom + 20}px`;
+}
+if (bag) new MutationObserver(() => requestAnimationFrame(clearBag)).observe(bag, { attributes: true, attributeFilter: ['hidden'] });
 
 function shrink() {
   if (!stage || shrunk) return;
