@@ -3,7 +3,7 @@
 // method "barn" (handled in web/sasha-live.ts, which calls window.Barn in site/barn.js).
 import { type JobContext, llm } from '@livekit/agents';
 import { z } from 'zod';
-import { brief, buildOutfits, byId, details, search, type Outfit } from './store.ts';
+import { brief, buildOutfits, byId, describePhotos, details, search, type Outfit } from './store.ts';
 import { readSnapshot, tryOn } from './tryon.ts';
 
 type Log = (msg: string, extra?: unknown) => void;
@@ -50,6 +50,9 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     return { product_id: id, title: b.title, brand: b.brand, price: b.price, color: b.color };
   };
 
+  let openId = '';
+  let flipTimer: ReturnType<typeof setTimeout> | undefined;
+  const PHOTO_SECONDS = 6;
   let lastBuild: { budget: number; at: number; run: Promise<unknown> } | null = null;
   async function buildAndShow({ occasion, budget_usd, gender, notes }: { occasion: string; budget_usd: number; gender: 'men' | 'women'; notes?: string }) {
         if (!(budget_usd > 0)) return { ok: false, error: 'Ask for his budget first.' };
@@ -65,6 +68,8 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           },
         });
         outfits.forEach((_, i) => picture(i)); // the reveal is ready by the time he picks
+        for (const o of outfits) for (const it of o.items) if (byId[it.product_id]) describePhotos(byId[it.product_id]).catch(() => {});
+        log(outfits.map((o, i) => `outfit ${i + 1} ${o.outfit_name}: ${o.items.map((it) => byId[it.product_id]?.title).join(' + ')}`).join('\n'));
         return {
           ok: true,
           say_next: 'All three are on his screen now. Even if he spoke while you waited, introduce each one by name in one sentence about its feel and where it shines (its intro), then ask which he likes. Save the piece-by-piece detail for after he picks.',
@@ -118,7 +123,35 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
       execute: async ({ product_id }) => {
         if (!byId[product_id]) return { ok: false, error: `No product ${product_id}` };
         const out = await page('open_product', { id: product_id });
-        return { ...brief(byId[product_id]), sizes_in_stock: out.sizes, colors: out.colors };
+        openId = product_id;
+        describePhotos(byId[product_id]).catch(() => {}); // ready by the time he wants a closer look
+        return { ...details(byId[product_id]), sizes_in_stock: out.sizes, colors: out.colors, photos: byId[product_id].images.length };
+      },
+    }),
+
+    walk_through_photos: llm.tool({
+      description: 'A closer look at one product: opens its page and flips through its photos on his screen, one every few seconds, while you talk. Returns what each photo shows, in order. Use it when he wants to see a piece in more detail.',
+      parameters: z.object({ product_id: z.string() }),
+      execute: async ({ product_id }) => {
+        const p = byId[product_id];
+        if (!p) return { ok: false, error: `No product ${product_id}` };
+        if (openId !== product_id) { await page('open_product', { id: product_id }); openId = product_id; }
+        const notes = await describePhotos(p).catch(() => [] as string[]);
+        const n = Math.min(4, p.images.length);
+        clearTimeout(flipTimer);
+        let k = 0;
+        const flip = async () => {
+          if (openId !== product_id) return;
+          await page('show_photo', { index: k });
+          if (++k < n) flipTimer = setTimeout(flip, PHOTO_SECONDS * 1000);
+        };
+        await flip();
+        log(`photo walkthrough of ${product_id}: ${n} photos`);
+        return {
+          ok: true, ...details(p),
+          photos: notes.slice(0, n).map((what_it_shows, i) => ({ photo: i + 1, on_screen_at_second: i * PHOTO_SECONDS, what_it_shows })),
+          how: `Photo 1 is on his screen now, and the page moves to the next photo every ${PHOTO_SECONDS} seconds. Talk about them in order, about two short sentences each, so your words match what he sees. Then ask what he thinks.`,
+        };
       },
     }),
 
@@ -144,7 +177,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     }),
 
     show_on_me: llm.tool({
-      description: 'The reveal: show him a picture of himself wearing one of the three outfits, head to toe. Use only after he says yes to seeing it on himself.',
+      description: 'The reveal: show him a picture of himself wearing one of the three outfits, head to toe. Call it the moment he says yes to "Want to see it on you?", or asks to see any of the three on himself.',
       parameters: z.object({ outfit_number: z.number().int().min(1).max(3) }),
       execute: async ({ outfit_number }) => {
         const i = outfit_number - 1;

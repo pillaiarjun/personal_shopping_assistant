@@ -230,3 +230,36 @@ Build ${4 - outfits.length} new outfits that stay under budget and differ from: 
   }
   return { outfits, ms: Date.now() - t0 };
 }
+
+// ---- Photo walkthrough: what each product photo shows, so Sasha can flip through them and talk ----
+const SITE_PHOTOS = 'https://mhalpert.github.io/mens-fashion-barn/data/catalog/';
+const photoNotes = new Map<string, Promise<string[]>>();
+
+/** One short note per product photo (the angle and the fine details you can see), cached per product. */
+export function describePhotos(p: any): Promise<string[]> {
+  if (!photoNotes.has(p.id)) {
+    const run = (async () => {
+      const pics = await Promise.all(p.images.map(async (path: string) => {
+        const res = await fetch(SITE_PHOTOS + path.replace(/\.(png|jpe?g)$/i, '.webp'));
+        if (!res.ok) throw new Error(`photo ${res.status}`);
+        return Buffer.from(await res.arrayBuffer()).toString('base64');
+      }));
+      const res = await ai().models.generateContent({
+        model: OUTFIT_MODEL,
+        contents: [{ role: 'user', parts: [
+          ...pics.map((data) => ({ inlineData: { mimeType: 'image/webp', data } })),
+          { text: `These are the ${pics.length} product photos, in order, for "${p.title}" by ${p.brand}. Product copy: ${p.description ?? ''}
+For each photo, write one or two short spoken sentences a stylist would say while showing it: the angle or view, then the fine details you can actually see in it (fabric texture, stitching, buttons, lining, collar, cuffs, hardware, how it drapes or fits on the model). Only what is visible. No prices.` },
+        ] }],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: { type: Type.OBJECT, properties: { photos: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ['photos'] },
+        },
+      });
+      return (JSON.parse(res.text ?? '{}').photos ?? []) as string[];
+    })();
+    run.catch(() => photoNotes.delete(p.id));
+    photoNotes.set(p.id, run);
+  }
+  return photoNotes.get(p.id)!;
+}

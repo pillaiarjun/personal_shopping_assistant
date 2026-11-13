@@ -144,6 +144,16 @@ const actions: Record<string, (a: Action) => unknown> = {
   tryon_loading: () => { shrink(); showReveal({ loading: true }); return { ok: true }; },
   tryon_show: (a) => { shrink(); showReveal({ url: `${SERVER}/tryon/${a.file}`, title: a.title }); return { ok: true }; },
   tryon_hide: () => { hideReveal(); return { ok: true }; },
+  // Flip the product page's gallery to one photo (clicks its thumbnail, waiting for the page to render).
+  show_photo: async (a) => {
+    shrink(); hideReveal();
+    for (let t = 0; t < 20; t++) {
+      const b = document.querySelector<HTMLButtonElement>(`.thumbs button[data-i="${a.index}"]`);
+      if (b) { b.click(); document.querySelector('.gal')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return { ok: true }; }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { ok: false, error: 'The product page is not showing that photo' };
+  },
 };
 
 async function onBarn(data: RpcInvocationData) {
