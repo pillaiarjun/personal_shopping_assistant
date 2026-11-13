@@ -53,6 +53,22 @@ class LiveGemini extends google.beta.realtime.RealtimeModel {
     // generation, so she goes silent until our dead-air nudge. Real barge-ins come from Gemini's own
     // "interrupted" signal, which still works; only this extra one is dropped, so her next words queue up behind
     // the current ones instead of killing them.
+    // Repeats: she starts talking the moment she calls a tool ("Got it, that's in your bag"), then talks again
+    // when the result lands. For quick tools whose result decides what she should say (the bag, the reveal,
+    // a swap, a pick) the result cuts in (INTERRUPT): the guess is dropped after a word or two and she says
+    // what really happened. A repeated call's copy of an earlier result is filed silently.
+    const QUICK = new Set(['add_to_bag', 'show_on_me', 'swap_piece', 'pick_outfit']);
+    const results = s.getToolResultsForRealtime;
+    s.getToolResultsForRealtime = function (this: any, ...a: any[]) {
+      const out = results.apply(this, a);
+      for (const r of out?.functionResponses ?? []) {
+        if (r.scheduling === undefined) continue; // Vertex, or already silent
+        const text = JSON.stringify(r.response ?? '');
+        if (/Same call a moment ago|Already on his screen from your last call/.test(text)) r.scheduling = FunctionResponseScheduling.SILENT;
+        else if (QUICK.has(r.name)) r.scheduling = FunctionResponseScheduling.INTERRUPT;
+      }
+      return out;
+    };
     const start = s.startNewGeneration;
     s.startNewGeneration = function (this: any) {
       const bargeIn = this.handleInputSpeechStarted;
@@ -177,7 +193,7 @@ export default defineAgent({
       ['build_around', /build around/i],
       ['see_it_question', /see it on you/i],
       ['sizes_question', /(what are you in|your sizes?|what size|waist).*\?/i],
-      ['closing', /ready whenever you|check ?out whenever|take care|see you|enjoy (the|your)|have (a|fun)/i],
+      ['closing', /ready whenever you|check ?out whenever|take care|see you (later|soon|next|then)|enjoy (the|your) (trip|vacation|wedding|event|day|weekend|night|party)|have (a (great|good|fun|blast)|fun)\b/i],
       ['second_outfit', /other (four |three |two )?days|days off|second outfit|another (look|outfit) for/i],
     ];
     function heardHerSay(text: string) {
@@ -221,7 +237,7 @@ export default defineAgent({
         return;
       }
       // A slow tool (the outfits, the bag): one quick filler line while it works.
-      if (toolsRunning && !filledThisTool && Date.now() - toolSince > 2500) {
+      if (toolsRunning && !filledThisTool && herLastStart < toolSince && Date.now() - toolSince > 2500) { // she hasn't said a filler herself
         filledThisTool = true;
         nudge('The store is still working on what he asked for. Fill the wait with one quick line or a short question about him, then stop.');
       }
