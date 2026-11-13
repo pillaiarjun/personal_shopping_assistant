@@ -45,8 +45,20 @@ GenAISession.prototype.sendRealtimeInput = function (params: any) {
 let liveSession: any = null;
 class LiveGemini extends google.beta.realtime.RealtimeModel {
   override session() {
-    const s = super.session();
+    const s: any = super.session();
     liveSession = s;
+    // The pause-then-jump bug. When she calls a tool mid-sentence ("Nice to meet you, Mike" + show_new_arrivals),
+    // Gemini carries on talking in a new generation. The plugin treats every generation it didn't ask for as a
+    // barge-in (it fires "input_speech_started"), which cuts off what she's saying AND aborts the new
+    // generation, so she goes silent until our dead-air nudge. Real barge-ins come from Gemini's own
+    // "interrupted" signal, which still works; only this extra one is dropped, so her next words queue up behind
+    // the current ones instead of killing them.
+    const start = s.startNewGeneration;
+    s.startNewGeneration = function (this: any) {
+      const bargeIn = this.handleInputSpeechStarted;
+      this.handleInputSpeechStarted = () => {};
+      try { return start.call(this); } finally { this.handleInputSpeechStarted = bargeIn; }
+    };
     return s;
   }
 }
