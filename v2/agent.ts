@@ -7,6 +7,7 @@
 //   GEMINI=inference | google
 //        inference = Gemini through LiveKit Cloud, needs only LIVEKIT_* keys (default)
 //        google    = your own GOOGLE_API_KEY
+//   GOOGLE_TRYON_API_KEY=... (optional) bills try-on pictures to a separate key, e.g. paid, while calls use a free one
 //   VISION=on | off         (default on: streams the camera to Gemini as live video; google mode only)
 
 import { type JobContext, ServerOptions, cli, defineAgent, inference, voice } from '@livekit/agents';

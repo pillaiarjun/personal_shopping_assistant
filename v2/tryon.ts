@@ -11,7 +11,9 @@ const SITE_PHOTOS = 'https://mhalpert.github.io/mens-fashion-barn/data/catalog/'
 const OUT_DIR = new URL('./tryon/', import.meta.url);
 
 let client: GoogleGenAI | null = null;
-const ai = () => (client ??= new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY }));
+// Try-on pictures can bill a separate key (GOOGLE_TRYON_API_KEY, e.g. a paid project) while the call,
+// vision and outfit building stay on GOOGLE_API_KEY (e.g. a free-tier project). Unset: one key for all.
+const ai = () => (client ??= new GoogleGenAI({ apiKey: process.env.GOOGLE_TRYON_API_KEY || process.env.GOOGLE_API_KEY }));
 
 const photoCache = new Map<string, Promise<Buffer>>();
 function productPhoto(p: any) {
