@@ -69,9 +69,12 @@ function makeModel() {
   return new inference.RealtimeModel({ model: 'google/gemini-3.8-live', voice: VOICE });
 }
 
-// Keeps the newest camera frame from the shopper.
+// Keeps the newest camera frame from the shopper. take() returns nothing once frames
+// stop arriving (camera off or muted), so Sasha never keeps "seeing" a frozen picture.
+const CAMERA_STALE_MS = 2000;
 function watchCamera(ctx: JobContext) {
   let latest: VideoFrame | null = null;
+  let latestAt = 0;
   let stream: VideoStream | null = null;
 
   const attach = (track: Track) => {
@@ -81,7 +84,10 @@ function watchCamera(ctx: JobContext) {
     stream = s;
     (async () => {
       try {
-        for await (const ev of s) latest = ev.frame;
+        for await (const ev of s) {
+          latest = ev.frame;
+          latestAt = Date.now();
+        }
       } catch {
         /* stream closed */
       }
@@ -98,7 +104,7 @@ function watchCamera(ctx: JobContext) {
     attach(track);
   });
 
-  return { take: () => latest };
+  return { take: () => (Date.now() - latestAt < CAMERA_STALE_MS ? latest : null) };
 }
 
 const t0 = Date.now();
@@ -143,11 +149,31 @@ export default defineAgent({
     let sending = false;
     let framesSent = 0;
     let lastSentAt = 0;
+    // --- Camera status: Gemini can't tell "no pictures" from "nothing to see", so we tell it
+    // whenever the camera goes off, dark or back on. It's added to her context quietly
+    // (turnComplete: false), so it doesn't make her speak.
+    type CamStatus = 'on' | 'off' | 'dark';
+    let camStatus: CamStatus | null = null;
+    const CAMERA_NOTES: Record<CamStatus, string> = {
+      off: 'CAMERA STATUS (from the app, not the shopper): the camera is OFF. No video is coming through, so you cannot see the shopper right now, and any earlier pictures are out of date. Do not describe their clothes or say you can see them. If it comes up, tell them their camera looks like it is off and ask them to turn it on.',
+      dark: 'CAMERA STATUS (from the app, not the shopper): the camera is on, but the picture is black or too dark to see anything. Do not describe their clothes or say you can see them. If it comes up, tell them you can\'t see anything and ask them to check the camera or step into the light.',
+      on: 'CAMERA STATUS (from the app, not the shopper): the camera is ON. You are getting live video of the shopper again. Only describe what is clearly visible in the newest picture.',
+    };
+    function setCamStatus(next: CamStatus) {
+      if (next === camStatus || !liveSession) return;
+      camStatus = next;
+      liveSession.sendClientEvent({
+        type: 'content',
+        value: { turns: [{ role: 'user', parts: [{ text: CAMERA_NOTES[next] }] }], turnComplete: false },
+      });
+      log(`camera status -> ${next}`);
+    }
+
     async function streamFrame() {
-      if (!camera || sending || !liveSession) return;
-      if (!userSpeaking && Date.now() - lastSentAt < 3000) return;
-      const frame = camera.take();
-      if (!frame) return;
+      if (sending || !liveSession) return;
+      const frame = camera?.take() ?? null;
+      if (!frame) return setCamStatus('off');
+      if (camStatus === 'on' && !userSpeaking && Date.now() - lastSentAt < 3000) return;
       sending = true;
       try {
         const rgba = frame.convert(VideoBufferType.RGBA);
@@ -156,6 +182,10 @@ export default defineAgent({
           .resize({ width: FRAME_WIDTH, withoutEnlargement: true })
           .jpeg({ quality: 80 })
           .toBuffer();
+        // A covered lens or blank feed still sends frames, just black ones.
+        const { channels } = await sharp(jpeg).stats();
+        const brightness = channels.reduce((sum, c) => sum + c.mean, 0) / channels.length;
+        setCamStatus(brightness < 15 ? 'dark' : 'on');
         liveSession.sendClientEvent({
           type: 'realtime_input',
           value: { mediaChunks: [{ mimeType: 'image/jpeg', data: jpeg.toString('base64') }] },
