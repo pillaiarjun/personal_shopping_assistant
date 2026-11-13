@@ -25,7 +25,7 @@ createServer(async (req, res) => {
       // His video-face choice rides along on his token; the agent reads it when he joins.
       const avatar = url.searchParams.get('avatar') === 'tavus' && process.env.TAVUS_API_KEY ? 'tavus' : 'none';
       const at = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, { identity: `shopper-${room}`, ttl: '1h', attributes: { avatar } });
-      at.addGrant({ room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true });
+      at.addGrant({ room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true, canUpdateOwnMetadata: true });
       res.setHeader('Content-Type', 'application/json');
       return res.end(JSON.stringify({ url: process.env.LIVEKIT_URL, token: await at.toJwt(), room }));
     }

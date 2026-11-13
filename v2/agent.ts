@@ -14,7 +14,7 @@
 import { type JobContext, ServerOptions, cli, defineAgent, inference, voice } from '@livekit/agents';
 import * as google from '@livekit/agents-plugin-google';
 import * as tavus from '@livekit/agents-plugin-tavus';
-import { RoomEvent, TrackKind, VideoBufferType, VideoStream, type Track, type VideoFrame } from '@livekit/rtc-node';
+import { RoomEvent, TrackKind, TrackPublishOptions, TrackSource, VideoBufferType, VideoStream, type Track, type VideoFrame } from '@livekit/rtc-node';
 import sharp from 'sharp';
 import { Behavior, FunctionResponseScheduling, Session as GenAISession } from '@google/genai';
 import dotenv from 'dotenv';
@@ -32,6 +32,55 @@ const VOICE = process.env.GEMINI_VOICE ?? 'Achernar';
 const FRAME_WIDTH = Number(process.env.FRAME_WIDTH ?? 768);
 
 // The full Sasha prompt (sasha-prompt.md); the store tools are in store-tools.ts.
+
+// Sasha's voice output that can be pointed at the call or at the Tavus face mid-call.
+// It forwards her audio to the current target and passes its playback events back up.
+class VoiceSwitch extends voice.AudioOutput {
+  private target: voice.AudioOutput;
+  private heard = new Set<voice.AudioOutput>();
+  private open = false; // a line is being captured right now
+  private dropping = false; // the line cut off by a switch is not replayed on the new target
+  constructor(first: voice.AudioOutput) {
+    super(first.sampleRate, undefined, { pause: true });
+    this.target = first;
+    this.listen(first);
+  }
+  private listen(o: voice.AudioOutput) {
+    if (this.heard.has(o)) return;
+    this.heard.add(o);
+    o.on(voice.AudioOutput.EVENT_PLAYBACK_STARTED, (ev: { createdAt: number }) => { if (o === this.target) this.onPlaybackStarted(ev.createdAt); });
+    o.on(voice.AudioOutput.EVENT_PLAYBACK_PROGRESSED, (ev: any) => { if (o === this.target) this.onPlaybackProgressed(ev); });
+    o.on(voice.AudioOutput.EVENT_PLAYBACK_FINISHED, (ev: any) => { if (this.pendingPlayoutSegments > 0) this.onPlaybackFinished(ev); });
+  }
+  use(next: voice.AudioOutput) {
+    if (next === this.target) return;
+    const old = this.target;
+    this.dropping = this.open;
+    old.clearBuffer();
+    old.onDetached();
+    this.target = next;
+    this.listen(next);
+    next.onAttached();
+  }
+  get canPause() { return this.target.canPause; }
+  async captureFrame(frame: any) {
+    await super.captureFrame(frame);
+    this.open = true;
+    if (!this.dropping) await this.target.captureFrame(frame);
+  }
+  flush() {
+    super.flush();
+    this.open = false;
+    if (this.dropping) { this.dropping = false; return; }
+    this.target.flush();
+  }
+  clearBuffer() { this.open = false; this.dropping = false; this.target.clearBuffer(); }
+  onAttached() { this.target.onAttached(); }
+  onDetached() { this.target.onDetached(); }
+  pause() { this.target.pause(); }
+  resume() { this.target.resume(); }
+}
+
 const INSTRUCTIONS = readFileSync(new URL('./sasha-prompt.md', import.meta.url), 'utf8');
 const GREETING = "Hey, I'm Sasha from Fashion Barn, and I'm here to help you get dressed. Let me get a good look at you. What's your name?";
 
@@ -412,20 +461,60 @@ export default defineAgent({
     const frameTimer = setInterval(streamFrame, 1000);
     ctx.addShutdownCallback(async () => clearInterval(frameTimer));
 
-    // --- Face: his "Video face" switch (sent on his token), else the AVATAR default.
-    const shopper = await Promise.race([ctx.waitForParticipant(), new Promise<null>((r) => setTimeout(() => r(null), 5000))]);
-    const choice = shopper?.attributes?.avatar ?? AVATAR;
-    const face = choice === 'tavus' && !!process.env.TAVUS_API_KEY;
-    log(`face: ${face ? 'Tavus video' : 'voice only'} (shopper chose ${shopper?.attributes?.avatar ?? 'nothing'}, default ${AVATAR})`);
-    if (face) {
-      const avatar = new tavus.AvatarSession({
+    // --- Face. Sasha's voice goes through a switch, so his "Face" button can move it between
+    // the call (voice only, her photo) and the Tavus video face at any point in the call.
+    const roomAudio = new voice.ParticipantAudioOutput(ctx.room, { sampleRate: 24000, numChannels: 1, trackPublishOptions: new TrackPublishOptions({ source: TrackSource.SOURCE_MICROPHONE }) });
+    const voiceSwitch = new VoiceSwitch(roomAudio);
+    session.output.audio = voiceSwitch;
+    roomAudio.start(new AbortController().signal).catch((e) => log(`room audio: ${e}`));
+    ctx.addShutdownCallback(async () => { await endFace(); await roomAudio.close().catch(() => {}); });
+
+    let avatar: tavus.AvatarSession | null = null;
+    async function startFace() {
+      const a = new tavus.AvatarSession({
         faceId: process.env.TAVUS_FACE_ID || undefined,
         palId: process.env.TAVUS_PAL_ID || undefined,
       });
-      log('starting Tavus avatar');
-      await avatar.start(session, ctx.room);
-      log('Tavus avatar started');
+      log('starting Tavus face');
+      const synced = session.output.audio;
+      await a.start(session, ctx.room); // makes the Tavus conversation and points the voice at it
+      const tavusAudio = session.output.audio!;
+      session.output.audio = synced; // keep the caption sync in front; only the switch changes
+      voiceSwitch.use(tavusAudio);
+      avatar = a;
+      log('Tavus face on');
     }
+    async function endFace() {
+      voiceSwitch.use(roomAudio);
+      const id = avatar?.conversationId;
+      avatar = null;
+      if (!id) return;
+      // Ending the conversation makes the face leave the room and stops the Tavus clock.
+      await fetch(`https://tavusapi.com/v2/conversations/${id}/end`, { method: 'POST', headers: { 'x-api-key': process.env.TAVUS_API_KEY! } })
+        .then((r) => log(`Tavus face off (${r.status})`), (e) => log(`Tavus end failed: ${e}`));
+    }
+    // One change at a time, always heading for his latest choice.
+    let wantFace = false;
+    let faceQueue = Promise.resolve();
+    const setFace = (on: boolean) => {
+      wantFace = on && !!process.env.TAVUS_API_KEY;
+      faceQueue = faceQueue.then(async () => {
+        if (wantFace === !!avatar) return;
+        if (wantFace) await startFace().catch((e) => { avatar = null; voiceSwitch.use(roomAudio); log(`Tavus face failed: ${e}`); });
+        else await endFace();
+      });
+      return faceQueue;
+    };
+    ctx.room.on(RoomEvent.ParticipantAttributesChanged, (changed: Record<string, string>, p: { identity: string }) => {
+      if (p.identity.startsWith('shopper-') && 'avatar' in changed) {
+        log(`face switch: ${changed.avatar}`);
+        setFace(changed.avatar === 'tavus');
+      }
+    });
+    const shopper = await Promise.race([ctx.waitForParticipant(), new Promise<null>((r) => setTimeout(() => r(null), 5000))]);
+    const choice = shopper?.attributes?.avatar ?? AVATAR;
+    log(`face at start: ${choice === 'tavus' ? 'Tavus video' : 'voice only'} (shopper chose ${shopper?.attributes?.avatar ?? 'nothing'}, default ${AVATAR})`);
+    await setFace(choice === 'tavus');
 
     await session.start({ agent, room: ctx.room });
 

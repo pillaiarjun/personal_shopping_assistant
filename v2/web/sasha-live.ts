@@ -29,7 +29,7 @@ body.sl-nobar{padding-right:0!important}
 .sl-docked .sl-caption{display:none}
 .sl-docked .sl-self{top:10px;right:10px;width:96px}
 .sl-docked .sl-bar{bottom:12px;gap:8px}
-.sl-docked .sl-bar button{padding:8px 12px;font-size:12px}
+.sl-docked .sl-ctl i{width:40px;height:40px}.sl-docked .sl-ctl b{display:none}
 .sl-stage{position:fixed;z-index:500;background:#0e0e10;color:#fff;font-family:"Hanken Grotesk",system-ui,sans-serif;transition:all .6s cubic-bezier(.2,.8,.2,1);overflow:hidden}
 .sl-full{inset:0;border-radius:0}
 .sl-corner{right:20px;bottom:20px;width:300px;height:330px;border-radius:20px;box-shadow:0 16px 50px rgba(0,0,0,.35)}
@@ -39,30 +39,35 @@ body.sl-nobar{padding-right:0!important}
 .sl-corner .sl-face{width:120px}
 .sl-face img,.sl-face video{width:100%;height:100%;border-radius:50%;object-fit:cover;position:relative;z-index:1}
 .sl-face video{position:absolute;inset:0;z-index:2;background:#0e0e10}
-.sl-face-toggle{position:fixed;right:24px;bottom:94px;z-index:450;display:flex;align-items:center;gap:8px;padding:6px 12px 6px 8px;border:1px solid rgba(0,0,0,.12);border-radius:999px;background:#fff;color:#111;font:500 13px/1 "Hanken Grotesk",system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.12)}
-.sl-face-toggle i{width:28px;height:16px;border-radius:999px;background:#c9c9c9;position:relative;transition:background .2s}
-.sl-face-toggle i::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform .2s}
-.sl-face-toggle[aria-checked="true"] i{background:#2f7d4f}
-.sl-face-toggle[aria-checked="true"] i::after{transform:translateX(12px)}
-.sl-face-toggle:focus-visible,.sl-launch:focus-visible{outline:2px solid #d4664a;outline-offset:3px}
+.sl-launch:focus-visible,.sl-ctl:focus-visible{outline:2px solid #d4664a;outline-offset:3px}
 .sl-face::before{content:"";position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle,rgba(255,196,140,.55),rgba(255,120,90,0) 70%);opacity:0;transform:scale(.9);transition:opacity .25s,transform .25s}
 .sl-speaking .sl-face::before{opacity:1;transform:scale(1.12);animation:sl-pulse 1.1s ease-in-out infinite}
 @keyframes sl-pulse{50%{transform:scale(1.2)}}
 .sl-name{font:400 34px/1.1 Sentient,Georgia,serif;letter-spacing:-.01em}
 .sl-corner .sl-name{font-size:20px}
 .sl-status{font-size:14px;opacity:.65;min-height:1.2em}
-.sl-caption{max-width:min(720px,92vw);text-align:center;font-size:20px;line-height:1.4;min-height:2.8em;opacity:.92}
+.sl-center>*{max-width:100%;box-sizing:border-box}
+.sl-caption{width:min(720px,100%);overflow-wrap:anywhere;text-align:center;font-size:20px;line-height:1.4;min-height:2.8em;opacity:.92}
 .sl-corner .sl-caption{display:none}
 .sl-self{position:absolute;top:20px;right:20px;width:220px;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#222;box-shadow:0 6px 20px rgba(0,0,0,.4);transition:all .6s cubic-bezier(.2,.8,.2,1)}
 .sl-corner .sl-self{top:12px;right:12px;width:92px}
 .sl-self video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
 .sl-self span{position:absolute;left:8px;bottom:6px;font-size:11px;background:rgba(0,0,0,.5);padding:2px 6px;border-radius:6px}
-.sl-bar{position:absolute;left:0;right:0;bottom:28px;display:flex;justify-content:center;gap:12px}
-.sl-corner .sl-bar{bottom:14px;gap:8px}
-.sl-bar button{border:0;border-radius:999px;padding:12px 20px;font:500 14px/1 "Hanken Grotesk",system-ui,sans-serif;cursor:pointer;background:#2a2a2e;color:#fff}
-.sl-corner .sl-bar button{padding:9px 12px;font-size:12px}
-.sl-bar .sl-end{background:#d6453d}
-.sl-bar .sl-off{background:#fff;color:#111}
+.sl-bar{position:absolute;left:0;right:0;bottom:22px;display:flex;justify-content:center;gap:18px}
+.sl-corner .sl-bar,.sl-docked .sl-bar{bottom:12px;gap:8px}
+.sl-ctl{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:64px;border:0;padding:0;background:none;color:#fff;font:500 12px/1 "Hanken Grotesk",system-ui,sans-serif;cursor:pointer}
+.sl-ctl i{display:grid;place-items:center;width:52px;height:52px;border-radius:50%;background:#2a2a2e;transition:background .15s}
+.sl-ctl:hover i{background:#3a3a40}
+.sl-ctl svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.sl-ctl .sl-slash{display:none}
+.sl-ctl.sl-off i{background:#fff;color:#d6453d}
+.sl-ctl.sl-off .sl-slash{display:inline}
+.sl-ctl.sl-wait i{animation:sl-blink 1s ease-in-out infinite}
+@keyframes sl-blink{50%{opacity:.45}}
+.sl-ctl.sl-end i{background:#d6453d}
+.sl-ctl.sl-end:hover i{background:#e5574f}
+.sl-corner .sl-ctl{min-width:0}.sl-corner .sl-ctl i{width:40px;height:40px}.sl-corner .sl-ctl b{display:none}
+.sl-corner .sl-ctl svg,.sl-docked .sl-ctl svg{width:18px;height:18px}
 .sl-reveal{position:fixed;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;background:rgba(10,10,12,.72);backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .4s}
 .sl-reveal.sl-on{opacity:1;pointer-events:auto}
 .sl-card{position:relative;background:#fff;color:#111;border-radius:22px;padding:18px;max-width:min(520px,92vw);box-shadow:0 30px 80px rgba(0,0,0,.4);transform:scale(.94);transition:transform .5s cubic-bezier(.2,.8,.2,1)}
@@ -119,27 +124,16 @@ const launch = el('button', 'sl-launch', `<img src="${sashaImg}" alt=""><span>Ta
 launch.type = 'button';
 document.body.append(launch);
 
-// ---- video face (Tavus) switch, chosen before the call ----
+// ---- video face (Tavus): on/off from the "Face" button in the call ----
 // The server says whether the face can run (Tavus key set) and whether it starts on (AVATAR=tavus).
-// His own choice is remembered in this browser and overrides the default.
-const faceToggle = el('button', 'sl-face-toggle', '<i aria-hidden="true"></i><span>Video face</span>');
-faceToggle.type = 'button';
-faceToggle.setAttribute('role', 'switch');
-faceToggle.hidden = true;
-document.body.append(faceToggle);
+// His own last choice is remembered in this browser and wins over the default.
+let faceAvailable = false;
 let faceOn = false;
-const setFace = (on: boolean) => { faceOn = on; faceToggle.setAttribute('aria-checked', String(on)); faceToggle.title = on ? 'Sasha appears as a live video face' : 'Voice only, with her photo'; };
-setFace(false);
-faceToggle.addEventListener('click', () => {
-  setFace(!faceOn);
-  try { localStorage.setItem('sasha-face', faceOn ? 'on' : 'off'); } catch {}
-});
 fetch(`${SERVER}/config`).then((r) => r.json()).then((c: { avatar_available?: boolean; avatar_default?: boolean }) => {
-  if (!c.avatar_available) return;
+  faceAvailable = !!c.avatar_available;
   let saved: string | null = null;
   try { saved = localStorage.getItem('sasha-face'); } catch {}
-  setFace(saved ? saved === 'on' : !!c.avatar_default);
-  faceToggle.hidden = launch.hidden;
+  faceOn = faceAvailable && (saved ? saved === 'on' : !!c.avatar_default);
 }).catch(() => {});
 // The store's "Your stylist" sidebar stays hidden until Sasha shrinks. Then, on wide screens, the
 // sidebar comes back and she docks into its video spot; on small screens she sits in the corner.
@@ -443,9 +437,30 @@ async function onBarn(data: RpcInvocationData) {
 }
 
 // ---- the call ----
+const slash = '<path class="sl-slash" d="M3 3l18 18"/>';
+const ICON = {
+  mic: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>${slash}</svg>`,
+  cam: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10l6-3v10l-6-3z"/>${slash}</svg>`,
+  face: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="4"/><path d="M4 21c1-4 4.5-6 8-6s7 2 8 6"/>${slash}</svg>`,
+  end: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 14.5c5-4.7 13-4.7 18 0l-2.2 2.8-3.8-1.2v-2.6a10 10 0 0 0-6 0v2.6l-3.8 1.2z" fill="currentColor" stroke="none"/></svg>',
+};
+// A control's look: "off" shows the white circle with a red slash, like a muted mic in a video call.
+function setCtl(btn: HTMLButtonElement, off: boolean, label: string, title: string) {
+  btn.classList.toggle('sl-off', off);
+  btn.setAttribute('aria-pressed', String(off));
+  btn.querySelector('b')!.textContent = label;
+  btn.title = title;
+}
+// Long replies keep only their latest sentences, so the caption never spills off the screen.
+const tail = (t: string) => {
+  if (t.length <= 220) return t;
+  const cut = t.slice(-220);
+  const i = cut.search(/[.!?]\s/);
+  return i >= 0 ? cut.slice(i + 2) : '…' + cut.slice(cut.indexOf(' ') + 1);
+};
+
 async function start() {
   launch.hidden = true;
-  faceToggle.hidden = true;
   stage = el('div', 'sl-stage sl-full', `
     <div class="sl-center">
       <div class="sl-face"><img src="${sashaImg}" alt="Sasha"></div>
@@ -454,10 +469,33 @@ async function start() {
       <div class="sl-caption" aria-live="polite"></div>
     </div>
     <div class="sl-self"><video autoplay muted playsinline></video><span>You</span></div>
-    <div class="sl-bar"><button class="sl-mute" type="button">Mute</button><button class="sl-cam" type="button">Camera off</button><button class="sl-end" type="button">End call</button></div>`);
+    <div class="sl-bar">
+      <button class="sl-ctl sl-mute" type="button" title="Mute your microphone"><i>${ICON.mic}</i><b>Mute</b></button>
+      <button class="sl-ctl sl-cam" type="button" title="Turn your camera off"><i>${ICON.cam}</i><b>Stop video</b></button>
+      <button class="sl-ctl sl-facebtn" type="button" hidden><i>${ICON.face}</i><b>Her face</b></button>
+      <button class="sl-ctl sl-end" type="button" title="End the call"><i>${ICON.end}</i><b>End</b></button>
+    </div>`);
   document.body.append(stage);
   shrunk = false;
   stage.querySelector('.sl-end')!.addEventListener('click', end);
+  // Her face button: off (photo, voice only), wait (the video face is starting), on (live video).
+  const faceBtn = stage.querySelector('.sl-facebtn') as HTMLButtonElement;
+  let faceTimer = 0;
+  const showFace = (state: 'off' | 'wait' | 'on') => {
+    clearTimeout(faceTimer);
+    faceBtn.classList.toggle('sl-wait', state === 'wait');
+    setCtl(faceBtn, state === 'off', state === 'off' ? 'Show face' : state === 'wait' ? 'Starting…' : 'Hide face',
+      state === 'off' ? 'Show Sasha as a live video face' : state === 'wait' ? 'Her video face is starting' : 'Back to voice only');
+    // The face takes a few seconds to join; if it never shows, go back to voice only.
+    if (state === 'wait') faceTimer = window.setTimeout(() => {
+      if (!faceOn || stage?.querySelector('.sl-face video')) return;
+      faceOn = false;
+      room?.localParticipant.setAttributes({ avatar: 'none' }).catch(() => {});
+      showFace('off');
+      setStatus("Her video face couldn't start, so it's voice only");
+    }, 45000);
+  };
+  const faceArrived = () => { if (faceOn) showFace('on'); };
 
   try {
     const { url, token } = await (await fetch(`${SERVER}/token?avatar=${faceOn ? 'tavus' : 'none'}`)).json();
@@ -469,7 +507,11 @@ async function start() {
       if (track.kind === Track.Kind.Video) {
         const face = stage?.querySelector('.sl-face');
         if (face) { face.querySelector('video')?.remove(); face.append(Object.assign(track.attach() as HTMLVideoElement, { muted: true, playsInline: true })); }
+        faceArrived();
       }
+    });
+    room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
+      if (track.kind === Track.Kind.Video) { track.detach().forEach((v) => v.remove()); stage?.querySelector('.sl-face video')?.remove(); }
     });
     room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
       const agentTalking = speakers.some((p) => p.identity !== room?.localParticipant.identity);
@@ -483,7 +525,8 @@ async function start() {
       const box = stage?.querySelector('.sl-caption');
       if (!box) return;
       box.textContent = '';
-      for await (const chunk of reader) box.textContent += chunk;
+      let said = '';
+      for await (const chunk of reader) { said += chunk; box.textContent = tail(said); }
     });
 
     await room.connect(url, token);
@@ -501,15 +544,24 @@ async function start() {
     muteBtn.addEventListener('click', async () => {
       const on = room!.localParticipant.isMicrophoneEnabled;
       await room!.localParticipant.setMicrophoneEnabled(!on);
-      muteBtn.textContent = on ? 'Unmute' : 'Mute';
-      muteBtn.classList.toggle('sl-off', on);
+      setCtl(muteBtn, on, on ? 'Unmute' : 'Mute', on ? 'Turn your microphone back on' : 'Mute your microphone');
     });
     const camBtn = stage.querySelector('.sl-cam') as HTMLButtonElement;
+    const showCam = (on: boolean) => setCtl(camBtn, !on, on ? 'Stop video' : 'Start video', on ? 'Turn your camera off' : 'Turn your camera on');
+    showCam(!!cam);
     camBtn.addEventListener('click', async () => {
       const on = room!.localParticipant.isCameraEnabled;
-      await room!.localParticipant.setCameraEnabled(!on);
-      camBtn.textContent = on ? 'Camera on' : 'Camera off';
-      camBtn.classList.toggle('sl-off', on);
+      await room!.localParticipant.setCameraEnabled(!on).catch(() => {});
+      showCam(room!.localParticipant.isCameraEnabled);
+    });
+    faceBtn.hidden = !faceAvailable;
+    showFace(faceOn ? 'wait' : 'off');
+    faceBtn.addEventListener('click', () => {
+      faceOn = !faceOn;
+      try { localStorage.setItem('sasha-face', faceOn ? 'on' : 'off'); } catch {}
+      room?.localParticipant.setAttributes({ avatar: faceOn ? 'tavus' : 'none' }).catch((e) => console.error('[sasha-live] face switch', e));
+      if (faceOn) showFace('wait');
+      else { stage?.querySelector('.sl-face video')?.remove(); showFace('off'); }
     });
   } catch (e) {
     console.error('[sasha-live]', e);
@@ -526,7 +578,6 @@ async function end() {
   stage = null;
   hideReveal();
   launch.hidden = false;
-  fetch(`${SERVER}/config`).then((r) => r.json()).then((c) => { faceToggle.hidden = !c.avatar_available; }).catch(() => {});
   document.body.classList.add('sl-nobar');
   shrunk = false;
 }
