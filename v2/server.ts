@@ -1,16 +1,18 @@
 // Small local server for the V2 call page (run next to the agent):  node server.ts
 //   GET /token       a LiveKit token for a new shopper room (the agent joins it on its own)
 //   GET /tryon/<f>   try-on images the agent made during the call
+//   GET /            the store page (site/) with Sasha, for a hosted server (Easypanel): one address for everything
 import dotenv from 'dotenv';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, extname, normalize } from 'node:path';
 import { AccessToken } from 'livekit-server-sdk';
 dotenv.config({ path: '.env.local', quiet: true });
 
 const PORT = Number(process.env.V2_PORT ?? 8790);
 const LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 const PAGES = ['https://pillaiarjun.github.io'];
+const TYPES: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.svg': 'image/svg+xml', '.csv': 'text/csv' };
 
 createServer(async (req, res) => {
   const origin = req.headers.origin ?? '';
@@ -29,10 +31,25 @@ createServer(async (req, res) => {
       res.setHeader('Content-Type', 'image/jpeg');
       return res.end(file);
     }
+    // The store page and what it loads, straight from the repo (site/ and data/ belong to the main site).
+    if (url.pathname === '/' || url.pathname === '/site' ) {
+      // Tell the page's Sasha script to use this same server for tokens and try-on pictures.
+      const host = req.headers['x-forwarded-host'] ?? req.headers.host;
+      const proto = req.headers['x-forwarded-proto'] ?? (LOCAL.test(`http://${host}`) ? 'http' : 'https');
+      res.writeHead(302, { Location: `/site/index.html?v2_server=${encodeURIComponent(`${proto}://${host}`)}` });
+      return res.end();
+    }
+    const STATIC = ['/site/', '/data/catalog/', '/v2/web/dist/'];
+    const path = normalize(decodeURIComponent(url.pathname));
+    if (STATIC.some((p) => path.startsWith(p)) && !path.includes('..')) {
+      const file = await readFile(new URL(`..${path}`, import.meta.url));
+      res.setHeader('Content-Type', TYPES[extname(path)] ?? 'application/octet-stream');
+      return res.end(file);
+    }
     res.statusCode = 404;
     res.end('not found');
   } catch (e) {
-    res.statusCode = 500;
+    res.statusCode = (e as any).code === "ENOENT" ? 404 : 500;
     res.end(String((e as Error).message));
   }
 }).listen(PORT, () => console.log(`Sasha V2 server on http://localhost:${PORT}`));

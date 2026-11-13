@@ -2,9 +2,8 @@
 # Build from the REPO ROOT so the shared catalog in data/ is included:
 #   docker build -f v2/Dockerfile .
 # Easypanel: source = this repo, branch v2, path "/", build = Dockerfile at v2/Dockerfile.
-# The same image runs either part, chosen by the start command:
-#   agent (default):   node agent.ts start
-#   token server:      node server.ts        (listens on $V2_PORT, default 8790)
+# By default it runs both parts: the agent, and server.ts on port 8790, which serves the store page at /
+# plus tokens and try-on pictures. Point a domain at port 8790 to open the site.
 # Keys come from the service's environment (LIVEKIT_*, GOOGLE_API_KEY, ...), never from files in the image.
 FROM node:24-slim
 
@@ -17,9 +16,11 @@ COPY v2/package.json v2/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # The catalog the store reads (store.ts loads ../data/catalog/products.json).
-COPY data/catalog/products.json /app/data/catalog/products.json
+COPY data/catalog/products.json data/catalog/outfits.json /app/data/catalog/
+# The store page itself (owned by the main site; served as-is by server.ts).
+COPY site/ /app/site/
 COPY v2/ ./
 
 ENV NODE_ENV=production GEMINI=google
 EXPOSE 8790 8081
-CMD ["node", "agent.ts", "start"]
+CMD ["sh", "-c", "node server.ts & exec node agent.ts start"]
