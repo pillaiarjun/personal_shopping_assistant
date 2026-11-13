@@ -3,7 +3,7 @@
 // method "barn" (handled in web/sasha-live.ts, which calls window.Barn in site/barn.js).
 import { type JobContext, llm } from '@livekit/agents';
 import { z } from 'zod';
-import { brief, buildOutfits, byId, search, type Outfit } from './store.ts';
+import { brief, buildOutfits, byId, details, search, type Outfit } from './store.ts';
 import { readSnapshot, tryOn } from './tryon.ts';
 
 type Log = (msg: string, extra?: unknown) => void;
@@ -49,6 +49,31 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     const b = brief(byId[id]);
     return { product_id: id, title: b.title, brand: b.brand, price: b.price, color: b.color };
   };
+
+  let lastBuild: { budget: number; at: number; run: Promise<unknown> } | null = null;
+  async function buildAndShow({ occasion, budget_usd, gender, notes }: { occasion: string; budget_usd: number; gender: 'men' | 'women'; notes?: string }) {
+        if (!(budget_usd > 0)) return { ok: false, error: 'Ask for his budget first.' };
+        const result = await buildOutfits({ occasion, budget_usd: Math.min(budget_usd, 10000), gender, notes });
+        log(`outfits for "${occasion}" ($${budget_usd}): ${result.outfits.length} in ${result.ms} ms`);
+        if (!result.outfits.length) return { ok: false, error: 'No outfits came back. Try a broader occasion or a higher budget.' };
+        outfits = result.outfits;
+        pictures = [];
+        await page('show_looks', {
+          result: {
+            looks: outfits.map((o) => ({ outfit_name: o.outfit_name, items: o.items.map(({ product_id, slot, why }) => ({ product_id, slot, why })), total_usd: o.total_usd })),
+            spoken_summary: outfits.map((o) => `${o.outfit_name}: ${o.difference}`).join(' '),
+          },
+        });
+        outfits.forEach((_, i) => picture(i)); // the reveal is ready by the time he picks
+        return {
+          ok: true,
+          say_next: 'All three are on his screen now. Even if he spoke while you waited, introduce each one by name in one sentence about its feel and where it shines (its intro), then ask which he likes. Save the piece-by-piece detail for after he picks.',
+          outfits: outfits.map((o, i) => ({
+            number: i + 1, name: o.outfit_name, intro: o.difference, how_it_works: o.why_it_works,
+            total_usd: o.total_usd, items: o.items.map((it) => ({ slot: it.slot, why: it.why, ...details(byId[it.product_id]) })),
+          })),
+        };
+  }
 
   const tools = {
     search_products: llm.tool({
@@ -105,26 +130,16 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         gender: z.enum(['men', 'women']),
         notes: z.string().optional().describe('His style, what he likes and hates, colors, what he is wearing now, and anything he wants to build around.'),
       }),
-      execute: async ({ occasion, budget_usd, gender, notes }) => {
-        const result = await buildOutfits({ occasion, budget_usd: Math.min(budget_usd, 10000), gender, notes });
-        log(`outfits for "${occasion}" ($${budget_usd}): ${result.outfits.length} in ${result.ms} ms`);
-        if (!result.outfits.length) return { ok: false, error: 'No outfits came back. Try a broader occasion or a higher budget.' };
-        outfits = result.outfits;
-        pictures = [];
-        await page('show_looks', {
-          result: {
-            looks: outfits.map((o) => ({ outfit_name: o.outfit_name, items: o.items.map(({ product_id, slot, why }) => ({ product_id, slot, why })), total_usd: o.total_usd })),
-            spoken_summary: outfits.map((o) => `${o.outfit_name}: ${o.difference}`).join(' '),
-          },
-        });
-        outfits.forEach((_, i) => picture(i)); // the reveal is ready by the time he picks
-        return {
-          ok: true,
-          outfits: outfits.map((o, i) => ({
-            number: i + 1, name: o.outfit_name, difference: o.difference, how_it_works: o.why_it_works,
-            total_usd: o.total_usd, items: o.items.map((it) => ({ slot: it.slot, ...item(it.product_id) })),
-          })),
-        };
+      execute: async (args) => {
+        // Gemini sometimes fires this twice in a row. One build per budget per minute and a half:
+        // a repeat gets the same outfits back instead of a fresh set on screen.
+        if (lastBuild && lastBuild.budget === args.budget_usd && Date.now() - lastBuild.at < 90000) {
+          const r: any = await lastBuild.run;
+          return r.ok ? { ...r, note: 'Already on his screen from your last call. Do not build again.' } : r;
+        }
+        const run = buildAndShow(args);
+        lastBuild = { budget: args.budget_usd, at: Date.now(), run };
+        return run;
       },
     }),
 
@@ -147,22 +162,28 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     }),
 
     add_to_bag: llm.tool({
-      description: 'Put items in his bag: a whole outfit by number, or single products by id. The store picks a common in-stock size unless he gave one.',
+      description: 'Put items in his bag, each in the size he confirmed: a whole outfit by number, or single products. Only after he has confirmed his sizes.',
       parameters: z.object({
-        outfit_number: z.number().int().min(1).max(3).optional(),
-        product_ids: z.array(z.string()).optional(),
-        size: z.string().optional().describe('Only if he told you his size.'),
+        outfit_number: z.number().int().min(1).max(3).optional().describe('A whole outfit from the last three.'),
+        items: z.array(z.object({
+          product_id: z.string(),
+          size: z.string().optional().describe('The size he confirmed for this piece, as listed in its sizes_in_stock.'),
+        })).optional().describe('Every piece to add with its size. For a whole outfit, list each of its pieces here too, with sizes.'),
       }),
-      execute: async ({ outfit_number, product_ids, size }) => {
-        const ids = product_ids?.length ? product_ids : outfit_number ? outfits[outfit_number - 1]?.items.map((it) => it.product_id) : [];
-        if (!ids?.length) return { ok: false, error: 'Say which outfit or which products.' };
+      execute: async ({ outfit_number, items }) => {
+        const outfitIds = outfit_number ? outfits[outfit_number - 1]?.items.map((it) => it.product_id) ?? [] : [];
+        const sized = new Map((items ?? []).map((it) => [it.product_id, it.size]));
+        const ids = [...new Set([...outfitIds, ...sized.keys()])];
+        if (!ids.length) return { ok: false, error: 'Say which outfit or which products.' };
         const added = [];
         for (const id of ids) {
-          const r = await page('add_to_bag', { id, size });
-          added.push({ ...item(id), ok: r.ok, size: r.size, error: r.error ?? undefined });
+          if (!byId[id]) { added.push({ product_id: id, ok: false, error: 'No such product' }); continue; }
+          const asked = sized.get(id);
+          const r = await page('add_to_bag', { id, size: asked });
+          added.push({ ...item(id), ok: r.ok, size: r.size, size_he_asked_for: asked, error: r.error ?? undefined });
         }
         const bag = await page('get_bag');
-        return { added, bag_items: bag.count, bag_total_usd: bag.total };
+        return { added, bag_items: bag.count, bag_total_usd: bag.total, note: 'If a size differs from what he asked for, it was out of stock: tell him.' };
       },
     }),
   };

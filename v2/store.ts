@@ -83,6 +83,18 @@ export async function search(f: SearchFilters) {
     .map(({ p }) => p);
 }
 
+/** Everything worth saying about one piece in an outfit, plus the sizes he can actually get. */
+export function details(p: any) {
+  const e = enriched[p.id] ?? {};
+  return {
+    ...brief(p),
+    pattern: e.pattern !== 'solid' ? e.pattern : undefined,
+    looks_like: e.visual_description,
+    pairs_with: e.pairs_with,
+    sizes_in_stock: p.size_type === 'one' ? undefined : p.sizes.filter((s: string) => p.simulated.inventory[s] > 0),
+  };
+}
+
 /** Short facts Sasha can talk about, small enough for a tool result. */
 export function brief(p: any) {
   const e = enriched[p.id] ?? {};
@@ -133,8 +145,8 @@ const outfitSchema = {
         type: Type.OBJECT,
         properties: {
           outfit_name: { type: Type.STRING, description: 'Short, fun name, 2 to 4 words.' },
-          difference: { type: Type.STRING, description: 'One short spoken line on how this look differs from the other two, e.g. "the sharpest of the three".' },
-          why_it_works: { type: Type.STRING, description: 'Two short spoken sentences on how the pieces play off each other: color, fabric, texture, how dressed-up each is. Plain words, a little attitude, no prices.' },
+          difference: { type: Type.STRING, description: 'One spoken sentence, outfit name first, on its feel and where it shines compared with the others, e.g. "The Clove Blue Sharp is the one for a board meeting." or "The Olive Cordura Edge reads higher-end but still a little dressed down."' },
+          why_it_works: { type: Type.STRING, description: 'Three spoken sentences on what makes the pairing interesting: how specific pieces play off each other in color, fabric, texture and how dressed-up each is, naming the pieces. Plain words, a little attitude, no prices.' },
           items: {
             type: Type.ARRAY,
             items: {
