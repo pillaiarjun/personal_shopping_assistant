@@ -106,6 +106,9 @@ main { flex: 1; outline: none; }
 .card-pic img + img { opacity: 0; }
 .card:hover .card-pic img + img, .card:focus-visible .card-pic img + img { opacity: 1; }
 .card:hover .card-pic img:first-child:not(:only-child), .card:focus-visible .card-pic img:first-child:not(:only-child) { opacity: 0; }
+.pill-new { display: inline-block; border-radius: var(--radius-pill); background: var(--color-ink); color: var(--color-paper); padding: 2px var(--space-xs); font-size: var(--text-xs); letter-spacing: .04em; text-transform: uppercase; line-height: 1.6; }
+.card-pic .pill-new { position: absolute; top: var(--space-xs); left: var(--space-xs); z-index: 1; }
+.info .brand .pill-new { margin-left: var(--space-xs); vertical-align: 1px; }
 .card-brand { margin-top: var(--space-sm); font-size: var(--text-xs); color: var(--color-muted); }
 .card-title { font-family: var(--font-display); font-weight: var(--serif-small); font-size: var(--text-md); line-height: 1.25; }
 .price { font-size: var(--text-sm); color: var(--color-ink-2); }

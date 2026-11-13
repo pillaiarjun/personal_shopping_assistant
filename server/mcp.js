@@ -38,6 +38,7 @@ const TOOLS = [
         max_price: { type: 'number', description: 'Highest price in USD' },
         size: { type: 'string', description: "Shopper's size for this garment" },
         on_sale: { type: 'boolean' },
+        just_in: { type: 'boolean', description: 'Only items marked Just In (new arrivals)' },
         limit: { type: 'integer', minimum: 1, maximum: 25, description: 'Default 10' },
       },
       additionalProperties: false,
@@ -46,7 +47,7 @@ const TOOLS = [
   {
     name: 'get_product',
     title: 'Get one product',
-    description: 'Full details for one product by id (e.g. MW-0370 or WW-0001): gender, description, colors, in-stock sizes, price, sale flag and photo URL.',
+    description: 'Full details for one product by id (e.g. MW-0370 or WW-0001): gender, description, colors, in-stock sizes, price, sale and just-in flags, and photo URL.',
     inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'Product id, e.g. MW-0370' } }, required: ['id'], additionalProperties: false },
   },
 ]
@@ -74,6 +75,7 @@ function search(a = {}) {
       && (!(Number(a.max_price) > 0) || p.price <= Number(a.max_price))
       && (!a.size || inSize(p, a.size))
       && (a.on_sale === undefined || p.on_sale === Boolean(a.on_sale))
+      && (a.just_in === undefined || Boolean(p.just_in) === Boolean(a.just_in))
   })
   return { count: hits.length, results: hits.slice(0, limit) }
 }

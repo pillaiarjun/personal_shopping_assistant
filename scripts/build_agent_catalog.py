@@ -27,6 +27,7 @@ def slim(p):
         "colors": p["colors"],
         "price": sim["price"],
         "on_sale": sim["on_sale"],
+        "just_in": sim.get("just_in", False),
         # Keep the catalog's size order, but only sizes that can actually be bought.
         "in_stock_sizes": [s for s in p["sizes"] if sim["inventory"].get(s, 0) > 0],
     }

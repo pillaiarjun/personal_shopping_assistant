@@ -46,8 +46,9 @@ function title(t) {
 }
 const find = (rx, g) => P.find((p) => (!g || p.gender === g) && new RegExp(rx, "i").test(p.title));
 const priceHtml = (p) => { const s = p.simulated; return `<span class="price">${money(s.price)}${s.on_sale ? ` <s>${money(s.compare_at_price)}</s>` : ""}</span>`; };
+const justIn = (p) => (p.simulated.just_in ? `<span class="pill-new">Just in</span>` : "");
 const card = (p) => `<a class="card" href="#/product/${p.id}">
-  <div class="card-pic"><img src="${img(p)}" alt="${esc(title(p.title))}" loading="lazy"><img src="${img(p, 1)}" alt="" loading="lazy"></div>
+  <div class="card-pic">${justIn(p)}<img src="${img(p)}" alt="${esc(title(p.title))}" loading="lazy"><img src="${img(p, 1)}" alt="" loading="lazy"></div>
   <div class="card-brand">${esc(p.brand)}</div><div class="card-title">${esc(title(p.title))}</div>${priceHtml(p)}</a>`;
 const lookItems = (l) => l.items.map((i) => byId[i.product_id]);
 const lookTotal = (l) => lookItems(l).reduce((a, p) => a + p.simulated.price, 0);
@@ -97,7 +98,7 @@ function home() {
 }
 
 // Filtering and sorting live outside shop() so window.Barn (barn.js) gets exactly what the page shows.
-const filtersFrom = (q) => ({ g: q.get("g"), dept: q.get("dept"), style: q.get("style"), brand: q.get("brand"), color: q.get("color"), max_price: q.get("max_price"), size: q.get("size"), sale: q.get("sale"), q: q.get("q"), sort: q.get("sort") || "featured" });
+const filtersFrom = (q) => ({ g: q.get("g"), dept: q.get("dept"), style: q.get("style"), brand: q.get("brand"), color: q.get("color"), max_price: q.get("max_price"), size: q.get("size"), sale: q.get("sale"), new: q.get("new"), q: q.get("q"), sort: q.get("sort") || "featured" });
 // In stock in the shopper's size. Sizes differ by category: "40R", "15.5 / 32-33", "10" (shoes); a bare waist like "32" also matches "32x30" and "32W | 33-35L".
 const normSize = (s) => String(s).toLowerCase().replace(/\s+/g, "");
 function inSize(p, want) {
@@ -149,7 +150,7 @@ function textMatch(p, q) {
 }
 
 function matches(p, f, skip) {
-  return (skip === "g" || !f.g || p.gender === f.g) && (skip === "dept" || !f.dept || deptOf(p) === f.dept) && (skip === "style" || !f.style || p.style === f.style) && (skip === "brand" || !f.brand || p.brand === f.brand) && (!f.sale || p.simulated.on_sale)
+  return (skip === "g" || !f.g || p.gender === f.g) && (skip === "dept" || !f.dept || deptOf(p) === f.dept) && (skip === "style" || !f.style || p.style === f.style) && (skip === "brand" || !f.brand || p.brand === f.brand) && (!f.sale || p.simulated.on_sale) && (!f.new || p.simulated.just_in)
     && (!f.color || (p.colors.join(" ") + " " + p.title).toLowerCase().includes(String(f.color).toLowerCase()))
     && (!(+f.max_price > 0) || p.simulated.price <= +f.max_price)
     && (!f.size || inSize(p, f.size))
@@ -171,14 +172,14 @@ function shop(q) {
   const group = (name, k, vals) => `<div class="fgroup"><h2>${name}</h2>${vals.map(([v, n, lab]) => `<a href="${link(k, v)}"${f[k] === v ? ' aria-current="true"' : ""}><span>${esc(lab || v)}</span><span>${n}</span></a>`).join("")}</div>`;
   const count = (fn, skip) => { const c = {}; P.filter((p) => match(p, skip)).forEach((p) => { const v = fn(p); c[v] = (c[v] || 0) + 1; }); return c; };
   const gc = count((p) => p.gender, "g"), dc = count(deptOf, "dept"), sc = count((p) => p.style, "style"), bc = count((p) => p.brand, "brand");
-  const head = f.q ? `Results for "${f.q}"` : f.sale ? "On sale" : f.dept || f.style || f.brand || ({ women: "Women", men: "Men" })[f.g] || "All clothing";
+  const head = f.q ? `Results for "${f.q}"` : f.new ? "Just in" : f.sale ? "On sale" : f.dept || f.style || f.brand || ({ women: "Women", men: "Men" })[f.g] || "All clothing";
   main.innerHTML = `<div class="container"><div class="shop-head"><h1>${esc(head)}</h1></div>
    <div class="shop"><details class="filters" ${innerWidth > 960 ? "open" : ""}><summary>Filter</summary>
     ${group("Shop", "g", [["women", gc.women || 0, "Women"], ["men", gc.men || 0, "Men"]])}
     ${group("Department", "dept", Object.keys(dc).filter((d) => d !== "undefined").sort((a, b) => dc[b] - dc[a]).map((d) => [d, dc[d]]))}
     ${group("Style", "style", ["Formal", "Business Casual", "Casual", "Streetwear", "Athletic", "Resort"].filter((s) => sc[s]).map((s) => [s, sc[s]]))}
     ${group("Brand", "brand", Object.entries(bc).sort((a, b) => b[1] - a[1]).slice(0, 10))}
-    <div class="fgroup"><a href="${link("sale", "1")}"${f.sale ? ' aria-current="true"' : ""}><span>On sale only</span></a></div>
+    <div class="fgroup"><a href="${link("new", "1")}"${f.new ? ' aria-current="true"' : ""}><span>Just in only</span></a><a href="${link("sale", "1")}"${f.sale ? ' aria-current="true"' : ""}><span>On sale only</span></a></div>
    </details>
    <div><div class="bar"><span>${r.length} ${r.length === 1 ? "piece" : "pieces"}${extra ? ` · ${esc(extra)}` : ""}</span>
      <label>Sort <select id="sort"><option value="featured">Featured</option><option value="low">Price, low to high</option><option value="high">Price, high to low</option></select></label></div>
@@ -197,7 +198,7 @@ function product(id) {
   main.innerHTML = `<div class="container"><p class="crumb"><a class="link" href="#/shop?g=${p.gender}&dept=${encodeURIComponent(d)}">${esc(d)}</a></p>
    <div class="pdp"><div class="gal"><div class="thumbs">${p.images.map((_, i) => `<button aria-label="Photo ${i + 1}" aria-pressed="${i === 0}" data-i="${i}"><img src="${img(p, i)}" alt=""></button>`).join("")}</div>
      <div class="gal-main"><img id="big" src="${img(p)}" alt="${esc(title(p.title))}"></div></div>
-    <div class="info"><div class="brand">${esc(p.brand)}</div><h1>${esc(title(p.title))}</h1>${priceHtml(p)}
+    <div class="info"><div class="brand">${esc(p.brand)}${justIn(p)}</div><h1>${esc(title(p.title))}</h1>${priceHtml(p)}
      <div class="opt"><div class="opt-label">Color <b id="cv">${esc(p.colors[0])}</b></div><div class="chips" data-g="c">${p.colors.map((c, i) => `<button class="chip" aria-pressed="${i === 0}" data-v="${esc(c)}">${esc(c)}</button>`).join("")}</div></div>
      ${p.size_type === "one" ? "" : `<div class="opt"><div class="opt-label">Size <b id="sv">Choose one</b></div><div class="chips" data-g="s">${p.sizes.map((s) => `<button class="chip" aria-pressed="false" data-v="${esc(s)}" ${inv[s] === 0 ? "disabled" : ""}>${esc(s)}</button>`).join("")}</div></div>`}
      <div class="buy"><button class="btn" id="bag">Add to bag</button><p class="buy-note" id="note" aria-live="polite"></p></div>
@@ -246,7 +247,7 @@ function route() {
   else if (parts[0] === "stylist") stylistPage(); // outfit board, site/board.js
   else home();
   if (!q.has("sort")) scrollTo(0, 0);
-  document.querySelectorAll(".nav-l a").forEach((a) => { const h = a.getAttribute("href"); const on = h === "#/shop?sale=1" ? q.has("sale") : h === "#/looks" ? parts[0] === "looks" : parts[0] === "shop" && h.endsWith("g=" + q.get("g")); on ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"); });
+  document.querySelectorAll(".nav-l a").forEach((a) => { const h = a.getAttribute("href"); const on = h === "#/shop?sale=1" ? q.has("sale") : h === "#/shop?new=1" ? q.has("new") : h === "#/looks" ? parts[0] === "looks" : parts[0] === "shop" && h.endsWith("g=" + q.get("g")); on ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"); });
   document.title = "Fashion Barn";
 }
 

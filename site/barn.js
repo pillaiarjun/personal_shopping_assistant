@@ -38,13 +38,14 @@
     // size: pass the shopper's size for the garment being searched (jacket "40R", shirt "15.5 / 32-33", waist "32", shoe "10").
     // gender: "men" or "women" limits results to that department (also accepted as g).
     search(filters = {}) {
+      if (filters.just_in) filters = { ...filters, new: true }; // "Just in" items
       const n = new URLSearchParams(), loose = [];
       const g = gender(filters.gender ?? filters.g ?? "");
       if (g) n.set("g", g);
-      for (const k of ["q", "dept", "style", "brand", "color", "max_price", "size", "sale"]) {
+      for (const k of ["q", "dept", "style", "brand", "color", "max_price", "size", "sale", "new"]) {
         const v = filters[k];
         if (v === undefined || v === null || v === "" || v === false) continue;
-        if (k === "sale") n.set("sale", "1");
+        if (k === "sale" || k === "new") n.set(k, "1");
         else if (resolve[k]) { const r = resolve[k](v, g); r ? n.set(k, r) : loose.push(v); } // unknown dept/style/brand becomes search text
         else n.set(k, String(v));
       }

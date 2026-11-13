@@ -18,3 +18,10 @@ A small test of the Gemini hackathon setup: Gemini Live is Sasha's voice, brain 
 - **Personality:** `sasha-prompt.md` is the real Sasha prompt from `pal/system-prompt.md`, adapted for Gemini: same attitude at a calmer pace, store tools taken out for now, camera review rules kept.
 
 `tests/` has the vision and voice tests. `casting/index.html` is the page used to compare voices; the audio clips are not in git.
+
+## Agreed for the hackathon build (2026-11-12)
+
+- **Opening:** Sasha starts full screen. The shopper's camera turns on right away and they see themselves in a small preview, so it's obvious she can see them. The first time she puts products on screen, she shrinks into the corner for the rest of the session.
+- **First read:** after "Hi, I'm Mike," she says what she sees ("navy track jacket over a white tee, very off-duty"), pulls up pieces in that lane, then asks: "Is that the vibe today, or are we dressing you for something?" Camera off: she skips the read and asks the question.
+- **Just In:** 116 items (about 1 in 9, spread across every department) are marked `simulated.just_in`, shown as "Just in" pills in the store, with a Just In page and filter. `search_products` takes `just_in: true`, so when she says something just came in, it's true.
+- **Catalog knowledge:** no RAG. A one-page cheat sheet in her prompt, a fast search tool over Gemini embeddings of the enriched catalog, and about 100 to 150 pre-built outfits with "complete the look" matches.
