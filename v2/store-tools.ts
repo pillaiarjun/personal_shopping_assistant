@@ -8,7 +8,9 @@ import { readSnapshot, tryOn } from './tryon.ts';
 
 type Log = (msg: string, extra?: unknown) => void;
 
-export function storeTools(ctx: JobContext, log: Log) {
+export interface ToolHooks { start(name: string): void; end(name: string): void }
+
+export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
   // ---- talking to the page ----
   const shopper = () => [...ctx.room.remoteParticipants.values()].find((p) => p.identity.startsWith('shopper-'))?.identity;
   async function page(action: string, args: Record<string, unknown> = {}) {
@@ -48,7 +50,7 @@ export function storeTools(ctx: JobContext, log: Log) {
     return { product_id: id, title: b.title, brand: b.brand, price: b.price, color: b.color };
   };
 
-  return {
+  const tools = {
     search_products: llm.tool({
       description: 'Find products in the store and put them on his screen. Use for any single-item request ("show me loafers", "something in linen"). Returns the products shown, best match first.',
       parameters: z.object({
@@ -69,6 +71,22 @@ export function storeTools(ctx: JobContext, log: Log) {
       },
     }),
 
+    show_new_arrivals: llm.tool({
+      description: 'Right after your first read of his outfit: put the new arrivals that match what he is wearing on his screen. Returns the pieces shown; name three of them.',
+      parameters: z.object({
+        wearing: z.string().describe('What you can see him wearing and its vibe: "brown zip-up track jacket, gray sweatpants, casual and sporty".'),
+        gender: z.enum(['men', 'women']),
+      }),
+      execute: async ({ wearing, gender }) => {
+        const t0 = Date.now();
+        const found = await search({ query: `new everyday pieces in the same spirit as: ${wearing}`, gender, just_in: true, slots: ['top', 'layer', 'bottom', 'shoes'], limit: 6 });
+        log(`new arrivals like "${wearing}": ${found.length} in ${Date.now() - t0} ms`);
+        if (!found.length) return { shown: 0, note: 'No new arrivals matched. Skip to the vibe question.' };
+        await page('show_products', { ids: found.map((p) => p.id), heading: 'Just in, picked for you' });
+        return { shown: found.length, products: found.map(brief) };
+      },
+    }),
+
     show_product: llm.tool({
       description: 'Open one product\'s page on his screen, with its photos, colors and sizes.',
       parameters: z.object({ product_id: z.string() }),
@@ -83,7 +101,7 @@ export function storeTools(ctx: JobContext, log: Log) {
       description: 'Pull three complete, different outfits from the store for his event and budget, and put them on his screen side by side. Takes a few seconds. Also starts his try-on pictures in the background.',
       parameters: z.object({
         occasion: z.string().describe('The event, setting and dress code: "beach wedding in Italy, July, afternoon".'),
-        budget_usd: z.number().describe('His budget for one whole outfit, in dollars (at most 10000).'),
+        budget_usd: z.number().describe('The budget he told you for one whole outfit, in dollars (at most 10000). Only call this after he has said a number.'),
         gender: z.enum(['men', 'women']),
         notes: z.string().optional().describe('His style, what he likes and hates, colors, what he is wearing now, and anything he wants to build around.'),
       }),
@@ -148,4 +166,14 @@ export function storeTools(ctx: JobContext, log: Log) {
       },
     }),
   };
+  // Every tool tells the agent when it starts and ends (agent.ts pauses the camera stream meanwhile).
+  for (const t of Object.values(tools) as any[]) {
+    const run = t.execute;
+    t.execute = async (...args: any[]) => {
+      const name = Object.keys(tools).find((k) => (tools as any)[k] === t)!;
+      hooks?.start(name);
+      try { return await run(...args); } finally { hooks?.end(name); }
+    };
+  }
+  return tools;
 }

@@ -121,7 +121,24 @@ export default defineAgent({
     await ctx.connect();
     log(`room joined  avatar=${AVATAR} gemini=${GEMINI} vision=${VISION}`);
 
-    const agent = new voice.Agent({ instructions: INSTRUCTIONS, tools: storeTools(ctx, log) });
+    // While a tool runs, Gemini waits for its result: extra input then (our camera frames) can make it
+    // drop the reply, so frames pause. If she still says nothing after a tool, nudge her to carry on.
+    let toolsRunning = 0;
+    let agentState = 'initializing';
+    let nudge: NodeJS.Timeout | undefined;
+    const hooks = {
+      start: (name: string) => { toolsRunning++; clearTimeout(nudge); log(`tool ${name} started`); },
+      end: (name: string) => {
+        toolsRunning--;
+        clearTimeout(nudge);
+        nudge = setTimeout(() => {
+          if (toolsRunning || agentState === 'speaking' || userSpeaking) return;
+          log(`silent after ${name}: nudging her to carry on`);
+          session.generateReply({ instructions: 'Carry on from where you were: talk him through what you just put on his screen, then keep the conversation going.' });
+        }, 2500);
+      },
+    };
+    const agent = new voice.Agent({ instructions: INSTRUCTIONS, tools: storeTools(ctx, log, hooks) });
     const session = new voice.AgentSession({ llm: makeModel() });
 
     // --- Timing: when you stop talking -> when Sasha starts talking.
@@ -131,6 +148,8 @@ export default defineAgent({
       if (ev.oldState === 'speaking') userStoppedAt = Date.now();
     });
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
+      agentState = ev.newState;
+      if (ev.newState === 'speaking') clearTimeout(nudge);
       if (ev.newState === 'speaking' && userStoppedAt) {
         log(`reply started ${Date.now() - userStoppedAt} ms after you stopped`);
         userStoppedAt = 0;
@@ -182,7 +201,7 @@ export default defineAgent({
     }
 
     async function streamFrame() {
-      if (sending || !liveSession) return;
+      if (sending || !liveSession || toolsRunning) return;
       const frame = camera?.take() ?? null;
       if (!frame) return setCamStatus('off');
       if (camStatus === 'on' && !userSpeaking && Date.now() - lastSentAt < 3000) return;
