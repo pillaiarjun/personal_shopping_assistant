@@ -27,7 +27,7 @@ dotenv.config({ path: '.env.local' });
 const AVATAR = process.env.AVATAR ?? 'none';
 const GEMINI = process.env.GEMINI ?? 'inference';
 const VISION = (process.env.VISION ?? 'on') !== 'off';
-const VOICE = process.env.GEMINI_VOICE ?? 'Aoede';
+const VOICE = process.env.GEMINI_VOICE ?? 'Achernar';
 const FRAME_WIDTH = Number(process.env.FRAME_WIDTH ?? 768);
 
 // The full Sasha prompt (sasha-prompt.md); the store tools are in store-tools.ts.
@@ -227,7 +227,7 @@ export default defineAgent({
       lastNudgeAt = Date.now();
       log(`dead air: ${why}`);
       record('nudge', { why });
-      liveSession.sendClientEvent({ type: 'content', value: { turns: [{ role: 'user', parts: [{ text: `APP NOTE (not from the shopper): it's been quiet for a couple of seconds. ${why} Carry on naturally from exactly where you left off, out loud, in plain words. Don't repeat yourself, don't greet him again, and don't mention this note.` }] }], turnComplete: true } });
+      liveSession.sendClientEvent({ type: 'content', value: { turns: [{ role: 'user', parts: [{ text: `APP NOTE (not from the shopper): it's been quiet for a couple of seconds. ${why} Carry on naturally from exactly where you left off, out loud, in plain words. Don't repeat yourself, don't greet him again, and don't mention this note. If he is clearly still mid-thought, just say a short "Mm-hm" or "Take your time." Never say stage directions or markup out loud, like "no speech" or "pause".` }] }], turnComplete: true } });
     }
     const watchdog = setInterval(() => {
       if (process.env.WATCHDOG === 'off' || flow.done.has('closing') || agentState === 'speaking' || userSpeaking || Date.now() - lastNudgeAt < 5000) return;
@@ -236,7 +236,10 @@ export default defineAgent({
       if (owed && lastLine.endsWith('?') && herLastStop > owed.since) owed = null;
       if (owed && !toolsRunning && Date.now() - owed.since > owed.gap) { const why = owed.why; owed = null; nudge(why); return; }
       // He said real words, stopped, and she hasn't started answering for 2.5 s: her turn, so nudge once.
-      if (userStoppedAt && answeredStop !== userStoppedAt && herLastStart < userStoppedAt && herLastStop < userStoppedAt - 300 && wordsAt > userStartedAt && !toolsRunning && Date.now() - userStoppedAt > 2500) {
+      // After she asked him something he may be mid-answer ("For tops... um"), so give him longer first:
+      // a too-early nudge once made her say "<no speech>" out loud (Nov 13).
+      const wait = lastLine.endsWith('?') ? 5000 : 2500;
+      if (userStoppedAt && answeredStop !== userStoppedAt && herLastStart < userStoppedAt && herLastStop < userStoppedAt - 300 && wordsAt > userStartedAt && !toolsRunning && Date.now() - userStoppedAt > wait) {
         answeredStop = userStoppedAt;
         nudge('He finished talking and is waiting for your answer.');
         return;

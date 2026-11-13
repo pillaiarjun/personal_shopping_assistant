@@ -3,7 +3,7 @@
 // method "barn" (handled in web/sasha-live.ts, which calls window.Barn in site/barn.js).
 import { type JobContext, llm } from '@livekit/agents';
 import { z } from 'zod';
-import { brief, buildOutfits, byId, catalogSlot, describePhotos, details, search, type Outfit, type PhotoNote } from './store.ts';
+import { brief, buildOutfits, byId, catalogSlot, describePhotos, details, search, type HisSlot, type Outfit, type PhotoNote } from './store.ts';
 import { readSnapshot, tryOn } from './tryon.ts';
 
 type Log = (msg: string, extra?: unknown) => void;
@@ -76,11 +76,13 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
   // ---- outfits and their try-on pictures (started as soon as the outfits are on screen) ----
   let outfits: Outfit[] = [];
   let pictures: (Promise<string> | null)[] = [];
+  let ownPhoto: Buffer | null = null; // camera frame from when he showed the piece he's building around
   const startPicture = async (i: number) => {
     const snap = await readSnapshot();
     if (!snap) throw new Error('No camera picture of the shopper yet');
     const t0 = Date.now();
-    const file = await tryOn(snap, outfits[i].items.map((it) => it.product_id), `outfit-${i + 1}`);
+    const own = outfits[i].his_piece;
+    const file = await tryOn(snap, outfits[i].items.map((it) => it.product_id), `outfit-${i + 1}`, own ? { description: own, photo: ownPhoto ?? undefined } : undefined);
     log(`try-on ${i + 1} ready in ${((Date.now() - t0) / 1000).toFixed(1)} s -> ${file}`);
     return file;
   };
@@ -173,14 +175,22 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
   const bagged = new Set<string>(); // product ids put in his bag this call
   const heardAt = new Map<string, number>(); // when she was handed it
   const heard = new Map<string, number>(); // "MW-0383:L" -> his turn count when she was told to read it back (or offered it)
-  let lastBuild: { budget: number; at: number; run: Promise<unknown> } | null = null;
-  async function buildAndShow({ occasion, budget_usd, gender, notes }: { occasion: string; budget_usd: number; gender: 'men' | 'women'; notes?: string }) {
+  let lastBuild: { key: string; at: number; run: Promise<unknown> } | null = null;
+  const buildKey = (a: any) => `${a.budget_usd}|${a.his_piece?.description ?? ""}|${a.build_around_product_id ?? ""}`;
+  async function buildAndShow({ occasion, budget_usd, gender, notes, his_piece, build_around_product_id }: {
+    occasion: string; budget_usd: number; gender: 'men' | 'women'; notes?: string;
+    his_piece?: { slot: HisSlot; description: string }; build_around_product_id?: string;
+  }) {
         if (!(budget_usd > 0)) return { ok: false, error: 'Ask for his budget first.' };
         // She once made up $1,200 when his sentence cut off at "Total budget is". He has to have said a number.
         const heardNumbers = [...(hooks?.flow?.hisLines ?? []), hooks?.flow?.his ?? ''].some((t) => /\d|hundred|thousand|grand|\bk\b|fifty|twenty|thirty|forty|sixty|seventy|eighty|ninety/i.test(t));
         if (hooks?.flow && !heardNumbers) return { ok: false, error: "He hasn't told you a number yet. Ask him for his budget and wait for it; never guess one." };
-        const result = await buildOutfits({ occasion, budget_usd: Math.min(budget_usd, 10000), gender, notes });
-        log(`outfits for "${occasion}" ($${budget_usd}): ${result.outfits.length} in ${result.ms} ms from ${result.source}`);
+        const include_id = build_around_product_id && byId[build_around_product_id] ? build_around_product_id : undefined;
+        if (build_around_product_id && !include_id) return { ok: false, error: `No product ${build_around_product_id} in the store. Use a product_id from the screen.` };
+        // He's showing the piece now (or just did): keep this frame for the try-on, since he'll put it down.
+        ownPhoto = his_piece ? await readSnapshot().catch(() => null) : null;
+        const result = await buildOutfits({ occasion, budget_usd: Math.min(budget_usd, 10000), gender, notes, his_piece, include_id });
+        log(`outfits for "${occasion}" ($${budget_usd})${his_piece ? ` around his ${his_piece.description}` : ''}${include_id ? ` around ${include_id}` : ''}: ${result.outfits.length} in ${result.ms} ms from ${result.source}`);
         if (!result.outfits.length) return { ok: false, error: 'No outfits came back. Try a broader occasion or a higher budget.' };
         outfits = result.outfits;
         pictures = [];
@@ -199,6 +209,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           ok: true,
           already: hooks?.flow?.note(),
           replaces: picked !== null || hooks?.flow?.done.has('outfits') ? 'These replace any outfits from before: only talk about these, by these names.' : undefined,
+          built_around: his_piece ? `Every outfit keeps his own ${his_piece.description} as the ${his_piece.slot}; the store pieces go with it. Say so.` : include_id ? `Every outfit includes ${brief(byId[include_id]).title}.` : undefined,
           say_next: `${outfits.length === 3 ? 'All three are' : `These ${outfits.length} are`} on his screen now. Even if he spoke while you waited, introduce each one by name in one sentence about its feel and where it shines (its intro), then ask which he likes. Save the piece-by-piece detail for after he picks.`,
           outfits: outfits.map((o, i) => ({
             number: i + 1, name: o.outfit_name, intro: o.difference, how_it_works: o.why_it_works,
@@ -303,17 +314,22 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         occasion: z.string().describe('The event, setting and dress code: "beach wedding in Italy, July, afternoon".'),
         budget_usd: z.number().describe('The budget he told you for one whole outfit, in dollars (at most 10000). Only call this after he has said a number.'),
         gender: z.enum(['men', 'women']),
-        notes: z.string().optional().describe('His style, what he likes and hates, colors, what he is wearing now, and anything he wants to build around.'),
+        notes: z.string().optional().describe('His style, what he likes and hates, colors, what he is wearing now.'),
+        his_piece: z.object({
+          slot: z.enum(['top', 'layer', 'bottom', 'shoes', 'accessory']),
+          description: z.string().describe('What it looks like, from the camera: "light blue oxford shirt with a button-down collar".'),
+        }).optional().describe('A piece of HIS OWN he showed you on camera and wants to build around. Every outfit keeps it and the store fills the rest. Call while he is still showing it if you can.'),
+        build_around_product_id: z.string().optional().describe('A store product (product_id) he wants in every outfit, e.g. one he liked earlier.'),
       }),
       execute: async (args) => {
         // Gemini sometimes fires this twice in a row. One build per budget per minute and a half:
         // a repeat gets the same outfits back instead of a fresh set on screen.
-        if (lastBuild && lastBuild.budget === args.budget_usd && Date.now() - lastBuild.at < 90000) {
+        if (lastBuild && lastBuild.key === buildKey(args) && Date.now() - lastBuild.at < 90000) {
           const r: any = await lastBuild.run;
           return r.ok ? { ...r, note: 'Already on his screen from your last call. Do not build again.' } : r;
         }
         const run = buildAndShow(args);
-        lastBuild = { budget: args.budget_usd, at: Date.now(), run };
+        lastBuild = { key: buildKey(args), at: Date.now(), run };
         return run;
       },
     }),

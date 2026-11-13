@@ -142,10 +142,17 @@ export interface OutfitBrief {
   gender: 'men' | 'women';
   /** His style, likes, dislikes and what you can see him wearing. */
   notes?: string;
+  /** A piece of his own he showed on camera and wants to build around: it fills its slot in every outfit. */
+  his_piece?: { slot: HisSlot; description: string };
+  /** A store piece he wants in every outfit (a product_id). */
+  include_id?: string;
 }
+export type HisSlot = 'top' | 'layer' | 'bottom' | 'shoes' | 'accessory';
 
 export interface Outfit {
   outfit_name: string;
+  /** His own piece that stays in this outfit (not sold, not in items). */
+  his_piece?: string;
   /** One line on how this look differs from the other two. */
   difference: string;
   /** Two or three sentences on how the pieces work together. */
@@ -222,19 +229,28 @@ export async function fromLibrary(b: OutfitBrief): Promise<{ entry: LibraryEntry
 /** Three complete, different outfits inside the budget: from the library when one fits, otherwise built live. */
 export async function buildOutfits(b: OutfitBrief, opts: { model?: string; library?: boolean } = {}): Promise<{ outfits: Outfit[]; ms: number; source: string }> {
   const t0 = Date.now();
-  if (opts.library !== false) {
+  const his = b.his_piece;
+  const must = b.include_id && byId[b.include_id] ? byId[b.include_id] : undefined;
+  // Ready-made looks know nothing about a piece he wants to build around.
+  if (opts.library !== false && !his && !must) {
     const hit = await fromLibrary(b).catch((e) => { console.warn(`[store] library lookup failed: ${(e as Error).message}`); return undefined; });
     // A fresh copy each time: swap_piece edits the outfit in place.
     if (hit) return { outfits: structuredClone(hit.entry.outfits.slice(0, 3)), ms: Date.now() - t0, source: `library: ${hit.entry.occasion} $${hit.entry.budget_usd} (${hit.score.toFixed(2)})` };
   }
   const model = opts.model ?? OUTFIT_MODEL;
-  const query = `${b.gender}'s outfit for ${b.occasion}. ${b.notes ?? ''}`;
+  const around = his ? ` Built around his own ${his.description}.` : must ? ` Built around the ${brief(must).title}.` : '';
+  const query = `${b.gender}'s outfit for ${b.occasion}.${around} ${b.notes ?? ''}`;
   const q = await embedQuery(query);
   const qn = norm(q);
   // No single piece eats the budget: with four or more pieces, a third of it is plenty for the biggest one.
-  const ceiling = b.budget_usd * 0.36;
-  const pool = products.filter((p) => usable(p) && vectors[p.id] && p.gender === b.gender && p.simulated.price <= ceiling);
-  const lists = Object.entries(ROLES).map(([role, slots]) => {
+  // A must-have piece is paid first; the rest share what's left.
+  const left = b.budget_usd - (must?.simulated.price ?? 0);
+  const ceiling = Math.max(left * 0.4, b.budget_usd * 0.2);
+  const mustSlot = must ? enriched[must.id]?.slot : undefined;
+  const pool = products.filter((p) => usable(p) && vectors[p.id] && p.gender === b.gender && p.simulated.price <= ceiling && p.id !== must?.id);
+  // His own piece fills its role, so the store doesn't offer that role at all (a suit replaces his top or bottom too).
+  const skip = new Set<string>(his ? [his.slot, ...(his.slot === 'top' || his.slot === 'bottom' ? ['suit'] : [])] : []);
+  const lists = Object.entries(ROLES).filter(([role]) => !skip.has(role)).map(([role, slots]) => {
     const best = pool.filter((p) => slots.includes(enriched[p.id]?.slot))
       .map((p) => ({ p, s: cosine(q, qn, p.id) })).sort((x, y) => y.s - x.s).slice(0, PER_ROLE);
     const lines = best.map(({ p }) => {
@@ -257,7 +273,7 @@ Rules:
 - In "difference", compare with "the others" and never say how many outfits there are.
 - Make the outfits clearly different from each other (for example sharper, more relaxed, more edge), all right for the occasion.
 - Colors and formality must work together within each outfit.
-
+${his ? `- BUILT AROUND HIS OWN PIECE: he is keeping his own ${his.description} as the ${his.slot} in EVERY outfit. Do not add a store ${his.slot}; it counts as one of the ${MIN_PIECES} pieces and costs nothing. Build every outfit to go with it, and name it in "why_it_works".\n` : ''}${must ? `- BUILT AROUND ONE PIECE: every outfit must include ${must.id} ($${must.simulated.price}, ${brief(must).title}). Build each one around it in a different direction.\n` : ''}
 ${lists.join('\n\n')}`;
 
   const ask = async (text: string) => {
@@ -268,9 +284,17 @@ ${lists.join('\n\n')}`;
     });
     return (JSON.parse(res.text ?? '{}').outfits ?? []).map((o: any) => {
       const seen = new Set<string>();
-      const items = (o.items ?? []).filter((it: any) => byId[it.product_id] && !seen.has(it.product_id) && seen.add(it.product_id));
+      let items = (o.items ?? []).filter((it: any) => byId[it.product_id] && !seen.has(it.product_id) && seen.add(it.product_id));
+      // His own piece fills its slot: drop any store piece the model put there anyway.
+      if (his) items = items.filter((it: any) => !ROLES[his.slot].includes(enriched[it.product_id]?.slot) && !(skip.has('suit') && ROLES.suit.includes(enriched[it.product_id]?.slot)));
+      // The must-have piece goes in every outfit, in place of whatever the model put in its slot.
+      if (must && !items.some((it: any) => it.product_id === must.id)) {
+        const at = items.findIndex((it: any) => enriched[it.product_id]?.slot === mustSlot);
+        const piece = { product_id: must.id, slot: o.items?.[at]?.slot ?? mustSlot ?? 'Piece', why: 'The piece he wants to build around.' };
+        if (at >= 0) items[at] = piece; else items.unshift(piece);
+      }
       const total = items.reduce((a: number, it: any) => a + byId[it.product_id].simulated.price, 0);
-      return trim({ ...o, items, total_usd: Math.round(total * 100) / 100 });
+      return trim({ ...o, items, total_usd: Math.round(total * 100) / 100, ...(his ? { his_piece: his.description } : {}) });
     }) as Outfit[];
   };
   // When a full look runs a little over, swap its priciest pieces for the closest cheaper piece in the same slot.
@@ -278,9 +302,9 @@ ${lists.join('\n\n')}`;
   const price = (id: string) => byId[id].simulated.price;
   function trim(o: Outfit): Outfit {
     let over = o.total_usd - b.budget_usd;
-    if (over <= 0 || over > b.budget_usd * 0.4 || o.items.length < MIN_PIECES) return o;
+    if (over <= 0 || over > b.budget_usd * 0.4 || pieces(o) < MIN_PIECES) return o;
     const items = o.items.map((it) => ({ ...it }));
-    for (const it of [...items].sort((x, y) => price(y.product_id) - price(x.product_id))) {
+    for (const it of [...items].filter((x) => x.product_id !== must?.id).sort((x, y) => price(y.product_id) - price(x.product_id))) {
       const slot = enriched[it.product_id]?.slot;
       const cheaper = pool.filter((p) => enriched[p.id]?.slot === slot && p.simulated.price < price(it.product_id) && !items.some((x) => x.product_id === p.id))
         .sort((x, y) => score.get(y.id)! - score.get(x.id)!).slice(0, 20);
@@ -294,7 +318,8 @@ ${lists.join('\n\n')}`;
     const total = items.reduce((a, it) => a + price(it.product_id), 0);
     return { ...o, items, total_usd: Math.round(total * 100) / 100 };
   }
-  const complete = (o: Outfit) => o.items.length >= MIN_PIECES && o.items.some((it) => enriched[it.product_id]?.slot === 'shoes');
+  function pieces(o: Outfit) { return o.items.length + (his ? 1 : 0); }
+  const complete = (o: Outfit) => pieces(o) >= MIN_PIECES && (his?.slot === 'shoes' || o.items.some((it) => enriched[it.product_id]?.slot === 'shoes'));
   const fits = (o: Outfit) => complete(o) && o.total_usd <= b.budget_usd;
 
   const all = await ask(prompt);
@@ -304,7 +329,7 @@ ${lists.join('\n\n')}`;
     const wrong = all.filter((o) => !fits(o)).map((o) => `${o.outfit_name}: ${complete(o) ? `total $${o.total_usd}, over budget` : `only ${o.items.length} pieces or no shoes`} (${o.items.map((it) => `${it.product_id} $${byId[it.product_id].simulated.price}`).join(', ')})`);
     const fix = await ask(`${prompt}
 
-${wrong.length ? `These outfits broke the rules:\n${wrong.join('\n')}\n` : ''}Build ${4 - outfits.length} new outfits, each with at least ${MIN_PIECES} pieces including shoes and each under $${b.budget_usd}, different from: ${outfits.map((o) => o.outfit_name).join(', ') || 'none'}.`);
+${wrong.length ? `These outfits broke the rules:\n${wrong.join('\n')}\n` : ''}Build ${4 - outfits.length} new outfits, each with at least ${MIN_PIECES} pieces${his ? ` (his own ${his.slot} counts as one)` : ''} including shoes and each under $${b.budget_usd}, different from: ${outfits.map((o) => o.outfit_name).join(', ') || 'none'}.`);
     all.push(...fix);
     outfits = [...outfits, ...fix.filter(fits)].slice(0, 3);
   }

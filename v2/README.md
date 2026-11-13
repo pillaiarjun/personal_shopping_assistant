@@ -29,7 +29,7 @@ A small test of the Gemini hackathon setup: Gemini Live is Sasha's voice, brain 
 
 ## What we learned
 
-- **Voice and look:** the Tavus Olivia face with the Gemini Aoede voice.
+- **Voice and look:** the Tavus Olivia face with the Gemini Achernar voice.
 - **Vision:** camera frames have to go into Gemini Live's `video` input. The LiveKit Node plugin sends them as `media`, which gemini-3.8-live ignores, so `agent.ts` patches that. LiveKit Inference drops images, so use your own Google key (`GEMINI=google`).
 - **Speed:** Gemini starts answering in about 0.2–1.2 s. The long pauses came from turn-taking and from speaker echo making her interrupt herself. Set to low start sensitivity, high end sensitivity and 500 ms of silence.
 - **Google free tier:** it limits how many live sessions can run at once. Turn on billing before the hackathon.

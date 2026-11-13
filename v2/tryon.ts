@@ -36,16 +36,21 @@ function productPhoto(p: any) {
 }
 
 /** Makes the picture and returns its file name (served by server.ts at /tryon/<file>). */
-export async function tryOn(personJpeg: Buffer, productIds: string[], name: string): Promise<string> {
+export async function tryOn(personJpeg: Buffer, productIds: string[], name: string, keep?: { description: string; photo?: Buffer }): Promise<string> {
   const items = productIds.map((id) => byId[id]).filter(Boolean);
   const [person, ...photos] = await Promise.all([
     sharp(personJpeg).resize({ width: 1024, withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer(),
     ...items.map(productPhoto),
   ]);
-  const list = items.map((p, i) => `Image ${i + 2}: "${p.title}" (${p.category})`).join('\n');
-  const prompt = `Fashion photo shoot. Image 1 shows the shopper (it is only a reference for who they are). The other images are clothing products:
+  const own = keep?.photo ? await sharp(keep.photo).resize({ width: 1024, withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer() : null;
+  const first = own ? 3 : 2; // product images start after the shopper (and the photo of his own piece)
+  const list = items.map((p, i) => `Image ${i + first}: "${p.title}" (${p.category})`).join('\n');
+  const mine = keep
+    ? `\nThey are also wearing their OWN ${keep.description}${own ? ', shown in Image 2 (they are holding it up or wearing it there)' : ' from Image 1'}. Copy that exact item: same color, fabric, pattern and details. It is not one of the product images and must not be replaced by any of them.`
+    : '';
+  const prompt = `Fashion photo shoot. Image 1 shows the shopper (it is only a reference for who they are). The ${own ? 'images after Image 2' : 'other images'} are clothing products:
 ${list}
-Create a new full-length photo of this same person, head to toe, wearing ALL of these items together as one outfit.
+Create a new full-length photo of this same person, head to toe, wearing ALL of these items together as one outfit.${mine}
 Keep their face, hair, skin tone and body shape exactly the same so they are clearly recognizable. Do not make them slimmer, taller or more muscular.
 Setting: a professional photo studio with a seamless pure white background and floor, soft even lighting, a light natural shadow under the feet. Relaxed natural standing pose, facing the camera, the whole body and shoes in frame.
 Match each item's color, fabric, pattern and details to its product photo, with realistic fit, folds and shadows. Output one photo.`;
@@ -53,6 +58,7 @@ Match each item's color, fabric, pattern and details to its product photo, with 
     model: MODEL,
     contents: [{ role: 'user', parts: [
       { inlineData: { mimeType: 'image/jpeg', data: person.toString('base64') } },
+      ...(own ? [{ inlineData: { mimeType: 'image/jpeg', data: own.toString('base64') } }] : []),
       ...photos.map((b) => ({ inlineData: { mimeType: 'image/jpeg', data: b.toString('base64') } })),
       { text: prompt },
     ] }],
