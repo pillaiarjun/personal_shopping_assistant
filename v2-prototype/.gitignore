@@ -4,5 +4,5 @@ node_modules/
 last-frame.jpg
 casting/voices/
 casting/faces-p*.json
-casting/faces/
-agent.log
+snapshot.jpg
+tryon/

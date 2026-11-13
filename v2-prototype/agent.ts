@@ -149,6 +149,7 @@ export default defineAgent({
     let sending = false;
     let framesSent = 0;
     let lastSentAt = 0;
+    let lastSnapAt = 0;
     // --- Camera status: Gemini can't tell "no pictures" from "nothing to see", so we tell it
     // whenever the camera goes off, dark or back on. It's added to her context quietly
     // (turnComplete: false), so it doesn't make her speak.
@@ -186,6 +187,12 @@ export default defineAgent({
         const { channels } = await sharp(jpeg).stats();
         const brightness = channels.reduce((sum, c) => sum + c.mean, 0) / channels.length;
         setCamStatus(brightness < 15 ? 'dark' : 'on');
+        // Full-size photo for the try-on test (tests/try-on.ts), refreshed every 10 s.
+        if (camStatus === 'on' && Date.now() - lastSnapAt > 10000) {
+          lastSnapAt = Date.now();
+          await sharp(Buffer.from(rgba.data), { raw: { width: rgba.width, height: rgba.height, channels: 4 } })
+            .removeAlpha().jpeg({ quality: 90 }).toFile('snapshot.jpg');
+        }
         liveSession.sendClientEvent({
           type: 'realtime_input',
           value: { mediaChunks: [{ mimeType: 'image/jpeg', data: jpeg.toString('base64') }] },
