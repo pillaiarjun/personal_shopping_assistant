@@ -1,7 +1,9 @@
 // Sasha's store knowledge, on the agent side: fast search over the enriched catalog and a quick
 // three-outfit builder. Everything here runs in the agent process; the page only displays results.
 //   search()       Gemini embeddings of every product (catalog/embeddings.json) vs the shopper's words.
-//   buildOutfits() narrows each outfit slot to the best matches, then Gemini Flash Lite picks 3 looks.
+//   buildOutfits() first looks in the ready-made outfit library (catalog/outfit-library.json, built ahead
+//                  of time by Gemini 4 Hydrogen); if nothing there fits, it narrows each slot to the best
+//                  matches and Gemini Flash Lite picks 3 looks on the spot.
 import { GoogleGenAI, Type } from '@google/genai';
 import { existsSync, readFileSync } from 'node:fs';
 
@@ -153,8 +155,13 @@ export interface Outfit {
 }
 
 // Which catalog slots fill each outfit role. Suits and one-pieces replace top + bottom.
-const ROLES: Record<string, string[]> = { top: ['top'], layer: ['layer'], bottom: ['bottom'], suit: ['suit', 'one-piece'], shoes: ['shoes'] };
+const ROLES: Record<string, string[]> = {
+  top: ['top'], layer: ['layer'], bottom: ['bottom'], suit: ['suit', 'one-piece'], shoes: ['shoes'],
+  accessory: ['belt', 'neckwear', 'bag', 'jewelry', 'eyewear', 'headwear', 'other-accessory'],
+};
 const PER_ROLE = 14;
+/** Every outfit has at least this many pieces (a full look, not just shirt + pants + shoes). */
+export const MIN_PIECES = 4;
 
 const outfitSchema = {
   type: Type.OBJECT,
@@ -173,7 +180,7 @@ const outfitSchema = {
               type: Type.OBJECT,
               properties: {
                 product_id: { type: Type.STRING },
-                slot: { type: Type.STRING, description: 'Top, Layer, Bottom, Suit, Dress or Shoes.' },
+                slot: { type: Type.STRING, description: 'Top, Layer, Bottom, Suit, Dress, Shoes or Accessory.' },
                 why: { type: Type.STRING, description: 'Under 12 words on why this piece is in the look.' },
               },
               required: ['product_id', 'slot', 'why'],
@@ -187,13 +194,45 @@ const outfitSchema = {
   required: ['outfits'],
 };
 
-/** Three complete, different outfits inside the budget, usually in 3 to 6 seconds. */
-export async function buildOutfits(b: OutfitBrief): Promise<{ outfits: Outfit[]; ms: number }> {
+// ---- Ready-made outfit library (catalog/outfit-library.json, made by catalog/prebuild-outfits.ts) ----
+export interface LibraryEntry { occasion: string; gender: 'men' | 'women'; budget_usd: number; model: string; vector: number[]; outfits: Outfit[] }
+const LIB_FILE = root('./catalog/outfit-library.json');
+const library: LibraryEntry[] = existsSync(LIB_FILE) ? JSON.parse(readFileSync(LIB_FILE, 'utf8')).entries ?? [] : [];
+/** How close his occasion must be to a library occasion (cosine of the two embeddings) to reuse its outfits. */
+const LIB_MIN = Number(process.env.OUTFIT_LIBRARY_MIN ?? 0.86);
+const vcos = (a: number[], b: number[]) => { let d = 0; for (let i = 0; i < a.length; i++) d += a[i] * b[i]; return d / (norm(a) * norm(b)); };
+export const embedOccasion = (b: Pick<OutfitBrief, 'gender' | 'occasion'>) => embedQuery(`${b.gender}'s outfit for ${b.occasion}.`);
+
+/** The closest library entry for this brief, if it is close enough and fits his budget. */
+export async function fromLibrary(b: OutfitBrief): Promise<{ entry: LibraryEntry; score: number } | undefined> {
+  if (!library.length || process.env.OUTFIT_LIBRARY === 'off') return;
+  const q = await embedOccasion(b);
+  let best: { entry: LibraryEntry; score: number } | undefined;
+  for (const entry of library) {
+    // Same department, at or under his budget but not far under it, every piece still in stock.
+    if (entry.gender !== b.gender || entry.budget_usd > b.budget_usd || entry.budget_usd < b.budget_usd * 0.5) continue;
+    if (entry.outfits.length < 3 || !entry.outfits.every((o) => o.total_usd <= b.budget_usd && o.items.every((it) => byId[it.product_id] && usable(byId[it.product_id])))) continue;
+    const score = vcos(q, entry.vector);
+    // Prefer the closer occasion; on a near tie, the bigger budget (nicer pieces).
+    if (score >= LIB_MIN && (!best || score > best.score + 0.01 || (score > best.score - 0.01 && entry.budget_usd > best.entry.budget_usd))) best = { entry, score };
+  }
+  return best;
+}
+
+/** Three complete, different outfits inside the budget: from the library when one fits, otherwise built live. */
+export async function buildOutfits(b: OutfitBrief, opts: { model?: string; library?: boolean } = {}): Promise<{ outfits: Outfit[]; ms: number; source: string }> {
   const t0 = Date.now();
+  if (opts.library !== false) {
+    const hit = await fromLibrary(b).catch((e) => { console.warn(`[store] library lookup failed: ${(e as Error).message}`); return undefined; });
+    // A fresh copy each time: swap_piece edits the outfit in place.
+    if (hit) return { outfits: structuredClone(hit.entry.outfits.slice(0, 3)), ms: Date.now() - t0, source: `library: ${hit.entry.occasion} $${hit.entry.budget_usd} (${hit.score.toFixed(2)})` };
+  }
+  const model = opts.model ?? OUTFIT_MODEL;
   const query = `${b.gender}'s outfit for ${b.occasion}. ${b.notes ?? ''}`;
   const q = await embedQuery(query);
   const qn = norm(q);
-  const ceiling = b.budget_usd * 0.5; // no single piece eats the whole budget
+  // No single piece eats the budget: with four or more pieces, a third of it is plenty for the biggest one.
+  const ceiling = b.budget_usd * 0.36;
   const pool = products.filter((p) => usable(p) && vectors[p.id] && p.gender === b.gender && p.simulated.price <= ceiling);
   const lists = Object.entries(ROLES).map(([role, slots]) => {
     const best = pool.filter((p) => slots.includes(enriched[p.id]?.slot))
@@ -213,8 +252,8 @@ About the shopper: ${b.notes || 'nothing yet'}
 
 Rules:
 - Use only product ids from the lists below.
-- Each outfit is a top and a bottom (or a suit or dress instead of both), plus shoes. Add a layer only when it helps and the budget allows.
-- Every outfit's total must be at or under $${b.budget_usd}.
+- Every outfit has at least ${MIN_PIECES} pieces: a top and a bottom (or a suit or dress instead of both), shoes, and at least one finishing piece: a layer (jacket, blazer, overshirt, knit) or an accessory (belt, tie, bag, jewelry, sunglasses, hat). A suit still gets a shirt or top under it.
+- Every outfit's total must be at or under $${b.budget_usd}. If the budget is tight, pick cheaper pieces rather than dropping the finishing piece.
 - In "difference", compare with "the others" and never say how many outfits there are.
 - Make the outfits clearly different from each other (for example sharper, more relaxed, more edge), all right for the occasion.
 - Colors and formality must work together within each outfit.
@@ -223,32 +262,54 @@ ${lists.join('\n\n')}`;
 
   const ask = async (text: string) => {
     const res = await generate({
-      model: OUTFIT_MODEL,
+      model,
       contents: text,
       config: { responseMimeType: 'application/json', responseSchema: outfitSchema, temperature: 0.6 },
     });
     return (JSON.parse(res.text ?? '{}').outfits ?? []).map((o: any) => {
-      const items = o.items.filter((it: any) => byId[it.product_id]);
+      const seen = new Set<string>();
+      const items = (o.items ?? []).filter((it: any) => byId[it.product_id] && !seen.has(it.product_id) && seen.add(it.product_id));
       const total = items.reduce((a: number, it: any) => a + byId[it.product_id].simulated.price, 0);
-      return { ...o, items, total_usd: Math.round(total * 100) / 100 };
-    }).filter((o: Outfit) => o.items.length >= 2) as Outfit[];
+      return trim({ ...o, items, total_usd: Math.round(total * 100) / 100 });
+    }) as Outfit[];
   };
-  const fits = (o: Outfit) => o.total_usd <= b.budget_usd;
+  // When a full look runs a little over, swap its priciest pieces for the closest cheaper piece in the same slot.
+  const score = new Map(pool.map((p) => [p.id, cosine(q, qn, p.id)]));
+  const price = (id: string) => byId[id].simulated.price;
+  function trim(o: Outfit): Outfit {
+    let over = o.total_usd - b.budget_usd;
+    if (over <= 0 || over > b.budget_usd * 0.4 || o.items.length < MIN_PIECES) return o;
+    const items = o.items.map((it) => ({ ...it }));
+    for (const it of [...items].sort((x, y) => price(y.product_id) - price(x.product_id))) {
+      const slot = enriched[it.product_id]?.slot;
+      const cheaper = pool.filter((p) => enriched[p.id]?.slot === slot && p.simulated.price < price(it.product_id) && !items.some((x) => x.product_id === p.id))
+        .sort((x, y) => score.get(y.id)! - score.get(x.id)!).slice(0, 20);
+      const pick = cheaper.find((p) => p.simulated.price <= price(it.product_id) - over) ?? cheaper.sort((x, y) => x.simulated.price - y.simulated.price)[0];
+      if (!pick) continue;
+      over -= price(it.product_id) - pick.simulated.price;
+      it.product_id = pick.id;
+      if (over <= 0) break;
+    }
+    if (over > 0) return o;
+    const total = items.reduce((a, it) => a + price(it.product_id), 0);
+    return { ...o, items, total_usd: Math.round(total * 100) / 100 };
+  }
+  const complete = (o: Outfit) => o.items.length >= MIN_PIECES && o.items.some((it) => enriched[it.product_id]?.slot === 'shoes');
+  const fits = (o: Outfit) => complete(o) && o.total_usd <= b.budget_usd;
 
   const all = await ask(prompt);
   let outfits = all.filter(fits).slice(0, 3);
-  if (outfits.length < 3) {
-    // The model can't add up reliably: send back the ones that went over, with their real totals, once.
-    const over = all.filter((o) => !fits(o)).map((o) =>
-      `${o.outfit_name}: total $${o.total_usd} (${o.items.map((it) => `${it.product_id} $${byId[it.product_id].simulated.price}`).join(', ')})`);
+  // The model can't always add up, and sometimes sends too few or too-small looks: send back what was wrong, up to twice.
+  for (let round = 0; round < 2 && outfits.length < 3; round++) {
+    const wrong = all.filter((o) => !fits(o)).map((o) => `${o.outfit_name}: ${complete(o) ? `total $${o.total_usd}, over budget` : `only ${o.items.length} pieces or no shoes`} (${o.items.map((it) => `${it.product_id} $${byId[it.product_id].simulated.price}`).join(', ')})`);
     const fix = await ask(`${prompt}
 
-These outfits went over the $${b.budget_usd} budget:
-${over.join('\n')}
-Build ${4 - outfits.length} new outfits that stay under budget and differ from: ${outfits.map((o) => o.outfit_name).join(', ') || 'none'}.`);
+${wrong.length ? `These outfits broke the rules:\n${wrong.join('\n')}\n` : ''}Build ${4 - outfits.length} new outfits, each with at least ${MIN_PIECES} pieces including shoes and each under $${b.budget_usd}, different from: ${outfits.map((o) => o.outfit_name).join(', ') || 'none'}.`);
+    all.push(...fix);
     outfits = [...outfits, ...fix.filter(fits)].slice(0, 3);
   }
-  return { outfits, ms: Date.now() - t0 };
+  if (outfits.length < 3) console.warn(`[store] only ${outfits.length} good outfits for "${b.occasion}" $${b.budget_usd}; rejected: ${all.filter((o) => !fits(o)).map((o) => `${o.items.length} pcs $${o.total_usd}`).join(', ') || 'none sent'}`);
+  return { outfits, ms: Date.now() - t0, source: model };
 }
 
 // ---- Photo walkthrough: what each product photo shows, so Sasha can flip through them and talk ----

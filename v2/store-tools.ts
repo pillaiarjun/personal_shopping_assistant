@@ -180,7 +180,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         const heardNumbers = [...(hooks?.flow?.hisLines ?? []), hooks?.flow?.his ?? ''].some((t) => /\d|hundred|thousand|grand|\bk\b|fifty|twenty|thirty|forty|sixty|seventy|eighty|ninety/i.test(t));
         if (hooks?.flow && !heardNumbers) return { ok: false, error: "He hasn't told you a number yet. Ask him for his budget and wait for it; never guess one." };
         const result = await buildOutfits({ occasion, budget_usd: Math.min(budget_usd, 10000), gender, notes });
-        log(`outfits for "${occasion}" ($${budget_usd}): ${result.outfits.length} in ${result.ms} ms`);
+        log(`outfits for "${occasion}" ($${budget_usd}): ${result.outfits.length} in ${result.ms} ms from ${result.source}`);
         if (!result.outfits.length) return { ok: false, error: 'No outfits came back. Try a broader occasion or a higher budget.' };
         outfits = result.outfits;
         pictures = [];
