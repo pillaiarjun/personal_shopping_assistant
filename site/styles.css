@@ -103,9 +103,10 @@ main { flex: 1; outline: none; }
 .card { display: block; text-decoration: none; min-width: 0; }
 .card-pic { position: relative; background: var(--tile); aspect-ratio: 4 / 5; overflow: hidden; }
 .card-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; mix-blend-mode: multiply; transition: opacity var(--dur-short) var(--ease-out); }
+/* of-type, not child: the "Just in" badge comes before the photos, and :first-child then missed the first photo, so both showed at once on hover. */
 .card-pic img + img { opacity: 0; }
 .card:hover .card-pic img + img, .card:focus-visible .card-pic img + img { opacity: 1; }
-.card:hover .card-pic img:first-child:not(:only-child), .card:focus-visible .card-pic img:first-child:not(:only-child) { opacity: 0; }
+.card:hover .card-pic img:first-of-type:not(:only-of-type), .card:focus-visible .card-pic img:first-of-type:not(:only-of-type) { opacity: 0; }
 .pill-new { display: inline-block; border-radius: var(--radius-pill); background: var(--color-ink); color: var(--color-paper); padding: 2px var(--space-xs); font-size: var(--text-xs); letter-spacing: .04em; text-transform: uppercase; line-height: 1.6; }
 .card-pic .pill-new { position: absolute; top: var(--space-xs); left: var(--space-xs); z-index: 1; }
 .info .brand .pill-new { margin-left: var(--space-xs); vertical-align: 1px; }

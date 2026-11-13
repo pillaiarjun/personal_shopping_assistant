@@ -14,7 +14,7 @@ import * as google from '@livekit/agents-plugin-google';
 import * as tavus from '@livekit/agents-plugin-tavus';
 import { RoomEvent, TrackKind, VideoBufferType, VideoStream, type Track, type VideoFrame } from '@livekit/rtc-node';
 import sharp from 'sharp';
-import { Session as GenAISession } from '@google/genai';
+import { Behavior, FunctionResponseScheduling, Session as GenAISession } from '@google/genai';
 import dotenv from 'dotenv';
 import { writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
@@ -60,6 +60,10 @@ function makeModel() {
       voice: VOICE,
       // English only: on auto-detect, a casual answer was once heard as Swedish and she said goodbye.
       language: 'en-US',
+      // Tools don't block: she keeps talking while the store works, and the result comes in when she's
+      // free (WHEN_IDLE). With blocking tools Gemini often went silent after the result.
+      toolBehavior: Behavior.NON_BLOCKING,
+      toolResponseScheduling: FunctionResponseScheduling.WHEN_IDLE,
       inputAudioTranscription: { languageCodes: ['en-US'], customVocabulary: ['Sasha', 'Fashion Barn'] } as any,
       realtimeInputConfig: {
         automaticActivityDetection: {
@@ -132,7 +136,7 @@ export default defineAgent({
         toolsRunning--;
         clearTimeout(nudge);
         nudge = setTimeout(() => {
-          if (toolsRunning || agentState === 'speaking' || userSpeaking) return;
+          if (process.env.NUDGE !== 'on' || toolsRunning || agentState !== 'listening' || userSpeaking) return;
           log(`silent after ${name}: nudging her to carry on`);
           session.generateReply({ instructions: 'Carry on from where you were: talk him through what you just put on his screen, then keep the conversation going.' });
         }, 2500);
