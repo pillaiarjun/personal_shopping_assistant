@@ -34,13 +34,16 @@ function speech(text: string): Int16Array {
 
 const { url, token } = await (await fetch('http://localhost:8790/token')).json();
 const room = new Room();
-const actions: Record<string, unknown> = { get_bag: { ok: true, count: 0, total: 0 } };
+const actions: Record<string, unknown> = {};
+const bag: any[] = []; // what the fake store has bagged
 room.localParticipant!; // set after connect
 await room.connect(url, token, { autoSubscribe: true, dynacast: false });
 room.localParticipant!.registerRpcMethod('barn', async (data) => {
   const a = JSON.parse(data.payload);
   log(`PAGE ${a.action} ${JSON.stringify({ ...a, action: undefined, result: a.result ? `${a.result.looks.length} looks` : undefined }).slice(0, 160)}`);
-  return JSON.stringify(actions[a.action] ?? { ok: true, sizes: ['M', 'L'], colors: ['default'], size: 'M' });
+  if (a.action === 'add_to_bag') { bag.push(a); return JSON.stringify({ ok: true, size: a.size, count: bag.length }); }
+  if (a.action === 'get_bag') return JSON.stringify({ ok: true, count: bag.length, total: 0 });
+  return JSON.stringify(actions[a.action] ?? { ok: true, sizes: ['M', 'L'], colors: ['default'] });
 });
 log('joined');
 

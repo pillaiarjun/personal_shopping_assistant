@@ -17,9 +17,9 @@ import sharp from 'sharp';
 import { Behavior, FunctionResponseScheduling, Session as GenAISession } from '@google/genai';
 import dotenv from 'dotenv';
 import { writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { storeTools } from './store-tools.ts';
+import { newFlow, storeTools } from './store-tools.ts';
 
 dotenv.config({ path: '.env.local' });
 
@@ -69,7 +69,9 @@ function makeModel() {
         automaticActivityDetection: {
           startOfSpeechSensitivity: 'START_SENSITIVITY_LOW' as any,
           endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH' as any,
-          prefixPaddingMs: 200,
+          // Speech must last 400 ms before it counts as him talking over her, so a cough, a door or
+          // background chatter doesn't cut her off mid-sentence (that's what sounded like stuttering).
+          prefixPaddingMs: Number(process.env.PREFIX_MS ?? 400),
           silenceDurationMs: Number(process.env.SILENCE_MS ?? 500),
         },
       },
@@ -125,23 +127,101 @@ export default defineAgent({
     await ctx.connect();
     log(`room joined  avatar=${AVATAR} gemini=${GEMINI} vision=${VISION}`);
 
-    // While a tool runs, Gemini waits for its result: extra input then (our camera frames) can make it
-    // drop the reply, so frames pause. If she still says nothing after a tool, nudge her to carry on.
+    // --- The call log: everything in order, one JSON line each, in logs/call-<room>.jsonl:
+    // both sides of the conversation, every tool with its arguments and result, every page action,
+    // and what he clicks, scrolls and opens on the page himself.
+    mkdirSync('logs', { recursive: true });
+    const callStart = Date.now();
+    const callLog = `logs/call-${ctx.room.name}.jsonl`;
+    const record = (kind: string, data: Record<string, unknown> = {}) => {
+      try { appendFileSync(callLog, JSON.stringify({ t: +((Date.now() - callStart) / 1000).toFixed(1), kind, ...data }) + '\n'); } catch { /* logging never breaks the call */ }
+    };
+    const short = (v: unknown, n = 700) => { const j = JSON.stringify(v) ?? ''; return j.length > n ? j.slice(0, n) + '…' : j; };
+    log(`call log: ${callLog}`);
+
+    // --- Quiet notes: context for Gemini that doesn't make her speak (turnComplete: false).
+    // Held while she's talking so they never cut into a sentence.
+    const pendingNotes: string[] = [];
+    function quietNote(text: string) {
+      if (!liveSession) return;
+      if (agentState === 'speaking') { pendingNotes.push(text); return; }
+      liveSession.sendClientEvent({ type: 'content', value: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: false } });
+    }
+
+    // --- What has already happened (store-tools adds to it too), so she never asks the same thing twice.
+    const flow = newFlow();
+    const SAID: [string, RegExp][] = [
+      ['vibe_question', /event or (an )?occasion|specific event|specific occasion/i],
+      ['step_back', /step back|back up a (bit|little)|as far (back )?as you can/i],
+      ['budget', /(spend|budget)\b.*\?/i],
+      ['build_around', /build around/i],
+      ['see_it_question', /see it on you/i],
+      ['sizes_question', /(what are you in|your sizes?|what size|waist).*\?/i],
+      ['second_outfit', /other (four |three |two )?days|days off|second outfit|another (look|outfit) for/i],
+    ];
+    function heardHerSay(text: string) {
+      for (const [key, re] of SAID) {
+        if (!flow.done.has(key) && re.test(text)) {
+          flow.done.add(key);
+          record('flow', { done: key });
+          quietNote(`APP NOTE (not from the shopper): ${flow.note()} Keep moving to the next step.`);
+        }
+      }
+    }
+
+    // --- No dead air. Small beats are fine; a gap of more than about two seconds when it's her turn is not.
+    // Her turn: a tool just finished, or he finished talking. If she's still quiet after the gap (and he isn't
+    // talking), a note tells her to carry on. It goes straight to Gemini as a short turn of its own.
     let toolsRunning = 0;
     let agentState = 'initializing';
-    let nudge: NodeJS.Timeout | undefined;
+    let owed: { why: string; since: number; gap: number } | null = null;
+    let toolSince = 0;
+    let filledThisTool = false;
+    let lastNudgeAt = 0;
+    const owe = (why: string, gap: number) => { owed = { why, since: Date.now(), gap }; };
+    function nudge(why: string) {
+      if (!liveSession) return;
+      lastNudgeAt = Date.now();
+      log(`dead air: ${why}`);
+      record('nudge', { why });
+      liveSession.sendClientEvent({ type: 'content', value: { turns: [{ role: 'user', parts: [{ text: `APP NOTE (not from the shopper): it's been quiet for a couple of seconds. ${why} Carry on talking naturally from exactly where you left off. Don't repeat what you already said, don't greet him again, and don't mention this note.` }] }], turnComplete: true } });
+    }
+    const watchdog = setInterval(() => {
+      if (process.env.WATCHDOG === 'off' || agentState === 'speaking' || userSpeaking || Date.now() - lastNudgeAt < 5000) return;
+      if (owed && !toolsRunning && Date.now() - owed.since > owed.gap) { const why = owed.why; owed = null; nudge(why); return; }
+      // A slow tool (the outfits, the bag): one quick filler line while it works.
+      if (toolsRunning && !filledThisTool && Date.now() - toolSince > 2500) {
+        filledThisTool = true;
+        nudge('The store is still working on what he asked for. Fill the wait with one quick line or a short question about him, then stop.');
+      }
+    }, 250);
+    ctx.addShutdownCallback(async () => clearInterval(watchdog));
+
     const hooks = {
-      start: (name: string) => { toolsRunning++; clearTimeout(nudge); log(`tool ${name} started`); },
-      end: (name: string) => {
-        toolsRunning--;
-        clearTimeout(nudge);
-        nudge = setTimeout(() => {
-          if (process.env.NUDGE !== 'on' || toolsRunning || agentState !== 'listening' || userSpeaking) return;
-          log(`silent after ${name}: nudging her to carry on`);
-          session.generateReply({ instructions: 'Carry on from where you were: talk him through what you just put on his screen, then keep the conversation going.' });
-        }, 2500);
+      flow,
+      start: (name: string, args?: unknown) => {
+        toolsRunning++; toolSince = Date.now(); filledThisTool = false; owed = null;
+        log(`tool ${name} started`); record('tool', { name, args });
       },
+      end: (name: string, result?: unknown) => {
+        toolsRunning--;
+        log(`tool ${name} done in ${Date.now() - toolSince} ms`);
+        record('tool_result', { name, ms: Date.now() - toolSince, result: short(result) });
+        owe(`The ${name.replace(/_/g, ' ')} step finished and its result is in: tell him about it and keep the conversation going.`, 2000);
+      },
+      page: (action: string, args: unknown, result: unknown) => record('page', { action, args: short(args, 300), result: short(result, 300) }),
     };
+
+    // --- What he does on the page himself: logged, and the bigger moves passed to her quietly.
+    ctx.room.on(RoomEvent.DataReceived, (payload: Uint8Array, _p?: unknown, _k?: unknown, topic?: string) => {
+      if (topic !== 'shopper-activity') return;
+      try {
+        const a = JSON.parse(new TextDecoder().decode(payload));
+        record('shopper', a);
+        if (a.kind === 'page' || a.kind === 'click') quietNote(`APP NOTE (not from the shopper's voice): on the page he just ${a.kind === 'page' ? `opened ${a.detail}` : `clicked "${a.detail}" (page ${a.hash || '#/'})`}. Only bring it up if it helps.`);
+      } catch { /* ignore */ }
+    });
+
     const agent = new voice.Agent({ instructions: INSTRUCTIONS, tools: storeTools(ctx, log, hooks) });
     const session = new voice.AgentSession({ llm: makeModel() });
 
@@ -149,11 +229,14 @@ export default defineAgent({
     let userStoppedAt = 0;
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
       userSpeaking = ev.newState === 'speaking';
-      if (ev.oldState === 'speaking') userStoppedAt = Date.now();
+      if (userSpeaking && agentState === 'speaking') record('interrupted', {});
+      if (ev.oldState === 'speaking') { flow.userTurns++; userStoppedAt = Date.now(); owe('He finished talking and is waiting for your answer.', 2500); }
     });
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       agentState = ev.newState;
-      if (ev.newState === 'speaking') clearTimeout(nudge);
+      record('sasha_state', { state: ev.newState });
+      if (ev.newState === 'speaking') owed = null;
+      else if (pendingNotes.length) for (const n of pendingNotes.splice(0)) quietNote(n);
       if (ev.newState === 'speaking' && userStoppedAt) {
         log(`reply started ${Date.now() - userStoppedAt} ms after you stopped`);
         userStoppedAt = 0;
@@ -163,7 +246,11 @@ export default defineAgent({
     session.on(voice.AgentSessionEventTypes.ConversationItemAdded, (ev) => {
       const item = ev.item as any;
       const text = item.textContent ?? '';
-      if (text && (item.role === 'user' || item.role === 'assistant')) log(`${item.role === 'user' ? 'YOU' : 'SASHA'}: ${text}`);
+      if (text && (item.role === 'user' || item.role === 'assistant')) {
+        log(`${item.role === 'user' ? 'YOU' : 'SASHA'}: ${text}`);
+        record(item.role === 'user' ? 'you' : 'sasha', { text, interrupted: item.interrupted || undefined });
+        if (item.role === 'assistant') { heardHerSay(text); flow.said.push({ text, turn: flow.userTurns }); }
+      }
     });
     session.on(voice.AgentSessionEventTypes.MetricsCollected, (ev) => {
       const m = ev.metrics as any;
@@ -202,6 +289,7 @@ export default defineAgent({
         value: { turns: [{ role: 'user', parts: [{ text: CAMERA_NOTES[next] }] }], turnComplete: false },
       });
       log(`camera status -> ${next}`);
+      record('camera', { status: next });
     }
 
     async function streamFrame() {

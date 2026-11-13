@@ -67,6 +67,31 @@ body.sl-nobar{padding-right:0!important}
 .sl-loading{width:min(420px,80vw);aspect-ratio:3/4;border-radius:14px;background:linear-gradient(100deg,#eee 30%,#f8f8f8 50%,#eee 70%);background-size:300% 100%;animation:sl-shine 1.4s linear infinite}
 @keyframes sl-shine{to{background-position:-150% 0}}
 @media (max-width:640px){.sl-self{width:120px}.sl-corner{width:220px;height:280px}.sl-caption{font-size:17px}}
+.sl-cursor{position:fixed;left:0;top:0;z-index:700;width:30px;height:30px;pointer-events:none;opacity:0;transition:transform .75s cubic-bezier(.3,.9,.3,1),opacity .3s;filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))}
+.sl-cursor.sl-on{opacity:1}
+.sl-cursor b{position:absolute;left:24px;top:22px;font:600 11px/1 "Hanken Grotesk",system-ui,sans-serif;background:#d4664a;color:#fff;padding:4px 7px;border-radius:999px;white-space:nowrap}
+.sl-cursor.sl-press svg{transform:scale(.82);transition:transform .12s}
+.sl-ring{position:fixed;z-index:690;pointer-events:none;border:2px solid #d4664a;border-radius:10px;box-shadow:0 0 0 6px rgba(212,102,74,.18),0 0 0 9999px rgba(20,16,12,.18);opacity:0;transition:all .45s cubic-bezier(.3,.9,.3,1)}
+.sl-ring.sl-on{opacity:1}
+.sl-ripple{position:fixed;z-index:695;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;border:2px solid #d4664a;pointer-events:none;animation:sl-rip .6s ease-out forwards}
+@keyframes sl-rip{from{transform:scale(.3);opacity:1}to{transform:scale(1.6);opacity:0}}
+.sl-pick-grid{display:grid;grid-template-columns:minmax(0,6fr) minmax(0,5fr);gap:var(--space-2xl,48px);padding-bottom:var(--space-3xl,64px);align-items:start}
+.sl-pick-photo{position:relative;aspect-ratio:3/4;background:var(--tile,#f3f1ec);overflow:hidden}
+.sl-pick-photo>img{width:100%;height:100%;object-fit:cover;animation:sl-in .8s ease}
+@keyframes sl-in{from{opacity:0;transform:scale(1.03)}to{opacity:1;transform:none}}
+.sl-pick-collage{display:grid;grid-template-columns:1fr 1fr;gap:2px;height:100%}
+.sl-pick-collage img{width:100%;height:100%;object-fit:contain;mix-blend-mode:multiply;background:var(--tile,#f3f1ec)}
+.sl-pick-photo figcaption{position:absolute;left:12px;bottom:12px;font-size:12px;background:rgba(255,255,255,.85);padding:4px 8px;border-radius:6px}
+.sl-pick-info{position:sticky;top:calc(var(--nav-h,64px) + 24px)}
+.sl-pick-info h1{font-size:var(--text-3xl,40px);line-height:1.1;margin:4px 0 8px}
+.sl-pick-intro{color:var(--color-ink-2,#444);margin:0 0 16px}
+.sl-pick-item{grid-template-columns:64px 1fr auto!important;align-items:center}
+.sl-pick-size{font-size:12px;color:var(--color-muted,#777)}
+.sl-pick-item.sl-in-bag .sl-pick-size{color:#2f7d4f}
+.sl-pick-total{display:flex;justify-content:space-between;padding-top:14px;margin-top:4px;border-top:1px solid var(--color-rule,#ddd);font-size:var(--text-lg,20px)}
+.sl-pick-bag{margin-top:10px;font-size:14px;color:#2f7d4f;min-height:1.2em}
+.sl-back{display:inline-block;margin-bottom:12px}
+@media (max-width:820px){.sl-pick-grid{grid-template-columns:1fr}.sl-pick-info{position:static}}
 `;
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''): HTMLElementTagNameMap[K] {
@@ -133,6 +158,156 @@ function showReveal(content: { url?: string; title?: string; loading?: boolean }
 function hideReveal() { reveal.classList.remove('sl-on'); }
 reveal.addEventListener('click', (e) => { if (e.target === reveal) hideReveal(); });
 
+// ---- Sasha's pointer: she moves a cursor to a part of the page, rings it, and can click it ----
+// The store's own globals (site/app.js), used to draw the picked outfit like the rest of the store.
+declare const byId: Record<string, any>, img: (p: any, i?: number) => string, title: (s: string) => string, esc: (s: unknown) => string, money: (n: number) => string, priceHtml: (p: any) => string, main: HTMLElement;
+const cursor = el('div', 'sl-cursor', '<svg viewBox="0 0 24 24" width="30" height="30"><path d="M4 2l16 9-7 2-3 7z" fill="#d4664a" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg><b>Sasha</b>');
+const ring = el('div', 'sl-ring');
+document.body.append(ring, cursor);
+let ringTimer: ReturnType<typeof setTimeout> | undefined;
+let sashaActing = 0; // clicks Sasha makes herself are not reported as his
+let sashaScrollUntil = 0; // nor are her scrolls
+let ringOn: HTMLElement | null = null;
+const sashaScrolls = () => { sashaScrollUntil = Date.now() + 1500; };
+function placeRing() {
+  if (!ringOn) return;
+  const r = ringOn.getBoundingClientRect();
+  Object.assign(ring.style, { left: `${r.left - 6}px`, top: `${r.top - 6}px`, width: `${r.width + 12}px`, height: `${r.height + 12}px` });
+}
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Plain names for the parts of each page, so the agent can say "sizes" instead of a CSS selector.
+const TARGETS: Record<string, string> = {
+  photo: '.sl-pick-photo, .gal-main', thumbnails: '.thumbs', title: '.sl-pick-info h1, .info h1', price: '.info .price',
+  colors: '.chips[data-g="c"]', sizes: '.chips[data-g="s"]', description: '.desc p', details: '.desc ul', add_to_bag: '#bag',
+  related: '.also', total: '.sl-pick-total, .board-total', pieces: '.sl-pick-list', bag: '#bag-open', looks: '.board-looks', heading: 'main h1',
+};
+const loose = (s: string) => s.toLowerCase().replace(/[^a-z0-9.]/g, '');
+function findTarget(target: string): HTMLElement | null {
+  const [kind, ...rest] = target.split(':');
+  const v = rest.join(':').trim();
+  if (kind === 'product') {
+    return document.querySelector<HTMLElement>(`.sl-pick-item[data-id="${v}"]`)
+      ?? document.querySelector<HTMLElement>(`main a.card[href="#/product/${v}"], main .board-item a[href="#/product/${v}"]`)?.closest<HTMLElement>('.card, .board-item') ?? null;
+  }
+  if (kind === 'look') return document.querySelectorAll<HTMLElement>('.board-look')[Number(v) - 1] ?? null;
+  if (kind === 'photo' && v) return document.querySelector<HTMLElement>(`.thumbs button[data-i="${Number(v) - 1}"]`);
+  if (kind === 'size' || kind === 'color') {
+    const chips = [...document.querySelectorAll<HTMLElement>(`.chips[data-g="${kind[0]}"] .chip`)];
+    return chips.find((c) => loose(c.dataset.v ?? '') === loose(v)) ?? chips.find((c) => loose(c.dataset.v ?? '').startsWith(loose(v))) ?? null;
+  }
+  const sel = TARGETS[kind];
+  return sel ? [...document.querySelectorAll<HTMLElement>(sel)].find((e) => e.offsetParent !== null) ?? null : null;
+}
+function availableTargets() {
+  const out = Object.keys(TARGETS).filter((k) => findTarget(k));
+  document.querySelectorAll<HTMLElement>('.sl-pick-item, main a.card').forEach((e) => out.push(`product:${e.dataset.id ?? e.getAttribute('href')?.split('/').pop()}`));
+  document.querySelectorAll('.board-look').forEach((_, i) => out.push(`look:${i + 1}`));
+  document.querySelectorAll<HTMLElement>('.chips[data-g="s"] .chip:not([disabled])').forEach((c) => out.push(`size:${c.dataset.v}`));
+  document.querySelectorAll('.thumbs button').forEach((_, i) => out.push(`photo:${i + 1}`));
+  return [...new Set(out)].slice(0, 40);
+}
+async function pointAt(target: string, click = false) {
+  const t = findTarget(target);
+  if (!t) return { ok: false, error: `Nothing called "${target}" on this page`, available: availableTargets() };
+  const r0 = t.getBoundingClientRect();
+  if (r0.top < 70 || r0.bottom > innerHeight - 20) { sashaScrolls(); t.scrollIntoView({ behavior: 'smooth', block: 'center' }); await wait(550); }
+  const r = t.getBoundingClientRect();
+  const x = r.left + Math.min(r.width / 2, 120), y = r.top + Math.min(r.height / 2, 90);
+  cursor.style.transform = `translate(${x}px, ${y}px)`;
+  cursor.classList.add('sl-on');
+  ringOn = t;
+  placeRing();
+  ring.classList.add('sl-on');
+  clearTimeout(ringTimer);
+  ringTimer = setTimeout(() => { ring.classList.remove('sl-on'); cursor.classList.remove('sl-on'); ringOn = null; }, 7000);
+  await wait(800);
+  if (click) {
+    cursor.classList.add('sl-press');
+    const rip = el('div', 'sl-ripple');
+    Object.assign(rip.style, { left: `${x}px`, top: `${y}px` });
+    document.body.append(rip);
+    setTimeout(() => rip.remove(), 700);
+    await wait(150);
+    sashaActing++;
+    try { (t.matches('a, button') ? t : t.querySelector<HTMLElement>('a, button') ?? t).click(); } finally { setTimeout(() => sashaActing--, 50); }
+    cursor.classList.remove('sl-press');
+  }
+  return { ok: true, pointed_at: target, clicked: click || undefined };
+}
+// Keep the ring on its element while the page scrolls.
+addEventListener('scroll', placeRing, { passive: true });
+
+async function scrollPage(to: string) {
+  sashaScrolls();
+  if (to === 'top') scrollTo({ top: 0, behavior: 'smooth' });
+  else if (to === 'bottom') scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  else if (to === 'down' || to === 'up') scrollBy({ top: (to === 'down' ? 1 : -1) * innerHeight * 0.7, behavior: 'smooth' });
+  else {
+    const t = findTarget(to);
+    if (!t) return { ok: false, error: `Nothing called "${to}" on this page`, available: availableTargets() };
+    t.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  await wait(600);
+  const max = document.body.scrollHeight - innerHeight;
+  return { ok: true, at: max > 0 ? `${Math.round((scrollY / max) * 100)}% down the page` : 'the whole page fits on screen' };
+}
+
+// ---- the picked outfit, on its own: his try-on (or the pieces until then), each piece with its price, the total ----
+let pick: { name: string; items: { product_id: string; slot: string }[] } | null = null;
+function showPick(a: { name: string; intro?: string; items: { product_id: string; slot: string }[]; total_usd?: number }) {
+  pick = { name: a.name, items: a.items };
+  const ps = a.items.map((it) => ({ ...it, p: byId[it.product_id] })).filter((x) => x.p);
+  const total = a.total_usd ?? ps.reduce((s, x) => s + x.p.simulated.price, 0);
+  main.innerHTML = `<div class="container"><a class="link sl-back" href="#/stylist">← All three outfits</a>
+    <div class="sl-pick-grid"><figure class="sl-pick-photo" style="margin:0"><div class="sl-pick-collage">${ps.slice(0, 4).map((x) => `<img src="${img(x.p)}" alt="">`).join('')}</div></figure>
+    <div class="sl-pick-info"><div class="brand">Your pick</div><h1>${esc(a.name)}</h1>${a.intro ? `<p class="sl-pick-intro">${esc(a.intro)}</p>` : ''}
+    <ul class="board-items sl-pick-list">${ps.map((x) => `<li class="board-item sl-pick-item" data-id="${x.p.id}"><a class="board-pic" href="#/product/${x.p.id}"><img src="${img(x.p)}" alt=""></a>
+      <div><div class="board-slot">${esc(x.slot)}</div><a class="board-title" href="#/product/${x.p.id}">${esc(title(x.p.title))}</a><div class="card-brand">${esc(x.p.brand)}</div><div class="sl-pick-size"></div></div>${priceHtml(x.p)}</li>`).join('')}</ul>
+    <div class="sl-pick-total"><span>Outfit total</span><span>${money(Math.round(total * 100) / 100)}</span></div><p class="sl-pick-bag" aria-live="polite"></p></div></div></div>`;
+  main.querySelector('.sl-back')!.addEventListener('click', (e) => { e.preventDefault(); pick = null; barn()?.showLooks(barn()?.lastLooks); });
+  sashaScrolls();
+  scrollTo({ top: 0, behavior: 'smooth' });
+  return { ok: true, pieces: ps.length };
+}
+const pickShowing = () => !!pick && !!main.querySelector('.sl-pick-grid');
+function pickPhoto(url: string | null) {
+  const box = main.querySelector('.sl-pick-photo');
+  if (!box) return false;
+  box.innerHTML = url ? `<img src="${url}" alt="You wearing ${esc(pick?.name)}"><figcaption>A preview made by AI from your camera</figcaption>` : '<div class="sl-loading" style="width:100%;height:100%;border-radius:0"></div>';
+  return true;
+}
+// Bag lines in the pick list: each piece shows the size it went in at.
+addEventListener('barn:bag', (e: any) => {
+  if (!pickShowing() || e.detail?.action !== 'add') return;
+  const li = main.querySelector<HTMLElement>(`.sl-pick-item[data-id="${e.detail.id}"]`);
+  if (li) { li.classList.add('sl-in-bag'); li.querySelector('.sl-pick-size')!.textContent = `In your bag, size ${e.detail.size}`; }
+  const bag = barn()?.getBag();
+  const note = main.querySelector('.sl-pick-bag');
+  if (note && bag) note.textContent = `Bag: ${bag.count} ${bag.count === 1 ? 'item' : 'items'}, ${money(bag.total)}`;
+});
+addEventListener('hashchange', () => { pick = null; });
+
+// ---- what he does on the page, sent to the agent's call log (and to Sasha as quiet context) ----
+function report(kind: string, detail: string) {
+  if (!room || sashaActing) return;
+  room.localParticipant.publishData(new TextEncoder().encode(JSON.stringify({ kind, detail, hash: location.hash })), { reliable: true, topic: 'shopper-activity' }).catch(() => {});
+}
+document.addEventListener('click', (e) => {
+  const t = e.target as HTMLElement;
+  if (!e.isTrusted || t.closest('.sl-stage, .sl-launch')) return;
+  const a = t.closest<HTMLElement>('a, button, .chip, .card');
+  const what = a ? (a.getAttribute('aria-label') || a.textContent || a.getAttribute('href') || '').replace(/\s+/g, ' ').trim().slice(0, 80) : t.tagName.toLowerCase();
+  report('click', what || (a?.getAttribute('href') ?? ''));
+}, true);
+let scrollReport: ReturnType<typeof setTimeout> | undefined;
+addEventListener('scroll', (e) => {
+  if (!e.isTrusted || Date.now() < sashaScrollUntil) return;
+  clearTimeout(scrollReport);
+  scrollReport = setTimeout(() => { const max = document.body.scrollHeight - innerHeight; if (max > 0) report('scroll', `${Math.round((scrollY / max) * 100)}% down`); }, 1200);
+}, { passive: true });
+addEventListener('hashchange', () => report('page', location.hash || '#/'));
+
 // ---- what the agent can do on the page (RPC method "barn") ----
 type Action = { action: string; [k: string]: any };
 const actions: Record<string, (a: Action) => unknown> = {
@@ -141,15 +316,26 @@ const actions: Record<string, (a: Action) => unknown> = {
   show_looks: (a) => { shrink(); hideReveal(); return barn()?.showLooks(a.result); },
   add_to_bag: (a) => barn()?.addToBag(a.id, a.size, a.color),
   get_bag: () => barn()?.getBag(),
-  tryon_loading: () => { shrink(); showReveal({ loading: true }); return { ok: true }; },
-  tryon_show: (a) => { shrink(); showReveal({ url: `${SERVER}/tryon/${a.file}`, title: a.title }); return { ok: true }; },
+  // The try-on goes into the picked outfit's page when that's showing; otherwise it pops up over the page.
+  tryon_loading: (a) => { shrink(); if (!(pickShowing() && pick?.name === a.title && pickPhoto(null))) showReveal({ loading: true }); return { ok: true }; },
+  tryon_show: (a) => {
+    shrink();
+    const url = `${SERVER}/tryon/${a.file}`;
+    if (pickShowing() && pick?.name === a.title && pickPhoto(url)) { hideReveal(); scrollTo({ top: 0, behavior: 'smooth' }); } else showReveal({ url, title: a.title });
+    return { ok: true };
+  },
   tryon_hide: () => { hideReveal(); return { ok: true }; },
+  show_pick: (a) => { shrink(); hideReveal(); return showPick(a as any); },
+  point: (a) => { shrink(); return pointAt(String(a.target), !!a.click); },
+  scroll: (a) => { shrink(); return scrollPage(String(a.to)); },
+  open_bag: () => { if (document.getElementById('bag-drawer')?.hidden) document.getElementById('bag-open')?.click(); return { ok: true }; },
+  where: () => ({ ok: true, page: location.hash || '#/', targets: availableTargets() }),
   // Flip the product page's gallery to one photo (clicks its thumbnail, waiting for the page to render).
   show_photo: async (a) => {
     shrink(); hideReveal();
     for (let t = 0; t < 20; t++) {
       const b = document.querySelector<HTMLButtonElement>(`.thumbs button[data-i="${a.index}"]`);
-      if (b) { b.click(); document.querySelector('.gal')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return { ok: true }; }
+      if (b) { b.click(); sashaScrolls(); document.querySelector('.gal')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return { ok: true }; }
       await new Promise((r) => setTimeout(r, 100));
     }
     return { ok: false, error: 'The product page is not showing that photo' };

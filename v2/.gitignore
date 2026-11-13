@@ -10,3 +10,5 @@ tryon-photo.jpg
 agent.log
 catalog/embeddings.json
 server.log
+logs/
+sim.log
