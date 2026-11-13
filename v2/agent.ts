@@ -58,6 +58,9 @@ function makeModel() {
     return new LiveGemini({
       model: 'gemini-3.8-live',
       voice: VOICE,
+      // English only: on auto-detect, a casual answer was once heard as Swedish and she said goodbye.
+      language: 'en-US',
+      inputAudioTranscription: { languageCodes: ['en-US'], customVocabulary: ['Sasha', 'Fashion Barn'] } as any,
       realtimeInputConfig: {
         automaticActivityDetection: {
           startOfSpeechSensitivity: 'START_SENSITIVITY_LOW' as any,
