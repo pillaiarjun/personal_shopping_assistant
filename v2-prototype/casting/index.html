@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sasha Casting</title>
+<style>
+  :root { --bg:#faf8f5; --card:#fff; --ink:#1f1d1a; --muted:#6b665e; --line:#e7e2da; --accent:#2f5bd3; --pick:#e9efff; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151412; --card:#1f1d1b; --ink:#f1ede7; --muted:#a59f95; --line:#33302c; --accent:#8aa8ff; --pick:#232a40; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 -apple-system, system-ui, sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .stage { display:grid; grid-template-columns: minmax(0, 420px) 1fr; gap:20px; align-items:start; }
+  @media (max-width: 760px) { .stage { grid-template-columns:1fr; } }
+  .face { position:sticky; top:16px; background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .face video, .face img { width:100%; display:block; aspect-ratio:16/9; object-fit:cover; background:#000; }
+  .face .cap { padding:10px 12px; font-size:13px; color:var(--muted); }
+  .face .cap b { color:var(--ink); }
+  .now { margin-top:6px; font-size:13px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:18px 0 8px; }
+  h2:first-child { margin-top:0; }
+  .voice { display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-bottom:8px; cursor:pointer; }
+  .voice.playing { border-color:var(--accent); background:var(--pick); }
+  .voice button { flex:none; width:36px; height:36px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:14px; cursor:pointer; }
+  .voice .name { font-weight:600; }
+  .voice .desc { color:var(--muted); font-size:13px; }
+  .voice .was { font-size:12px; color:var(--muted); margin-left:auto; }
+  .note { color:var(--muted); font-size:13px; margin-top:16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Casting Sasha: Olivia + which voice?</h1>
+  <p class="sub">Press play on a voice. Olivia's preview plays along with the sound, so you can judge the pair. Every clip says the same line in Gemini Live's real voice.</p>
+  <div class="stage">
+    <div class="face">
+      <video id="face" src="https://cdn.replica.tavus.io/60598/2c6afec6.mp4" poster="faces/olivia.jpg" muted playsinline loop></video>
+      <div class="cap"><b>Olivia</b> · Tavus Phoenix 4.5 · face id r800fc6ba80d
+        <div class="now" id="now">Pick a voice to hear it.</div></div>
+    </div>
+    <div id="list"></div>
+  </div>
+  <p class="note">Male voices and the five voices that hit the free-tier limit (Gacrux, Orus, Enceladus, Achird, Sadaltager) are left out. Google's own one-word description is shown under each name.</p>
+</main>
+<script>
+const groups = [
+  ['Best fit for Olivia (youthful, warm)', [
+    ['Leda','Youthful'],['Autonoe','Bright'],['Laomedeia','Upbeat'],['Zephyr','Bright'],['Sulafat','Warm'],['Callirrhoe','Easy-going']]],
+  ['Also worth a listen', [
+    ['Despina','Smooth'],['Achernar','Soft'],['Vindemiatrix','Gentle'],['Erinome','Clear'],['Pulcherrima','Forward'],['Kore','Firm']]],
+  ['Your pick: Sulafat, scripted vs. in conversation', [['Sulafat','Casting clip (reading a script)'],['Sulafat-live','Same voice, answering as Sasha in a real chat']]],
+  ['What she had in the earlier test', [['Aoede','Breezy']]],
+];
+const list = document.getElementById('list'), face = document.getElementById('face'), now = document.getElementById('now');
+const audio = new Audio(); let current = null;
+for (const [title, voices] of groups) {
+  const h = document.createElement('h2'); h.textContent = title; list.appendChild(h);
+  for (const [name, desc] of voices) {
+    const row = document.createElement('div'); row.className = 'voice';
+    row.innerHTML = `<button aria-label="Play ${name}">▶</button><div><div class="name">${name}</div><div class="desc">${desc}</div></div>`;
+    row.onclick = () => play(name, row);
+    list.appendChild(row);
+  }
+}
+function play(name, row) {
+  if (current === row && !audio.paused) { audio.pause(); face.pause(); return; }
+  document.querySelectorAll('.voice').forEach(r => { r.classList.remove('playing'); r.querySelector('button').textContent = '▶'; });
+  current = row; row.classList.add('playing'); row.querySelector('button').textContent = '❚❚';
+  audio.src = `voices/${name}.wav`; audio.currentTime = 0; audio.play();
+  try { face.currentTime = 0; face.play(); } catch {}
+  now.textContent = `Now playing: ${name}`;
+}
+audio.onended = () => { face.pause(); if (current) { current.classList.remove('playing'); current.querySelector('button').textContent = '▶'; } };
+</script>
+</body>
+</html>

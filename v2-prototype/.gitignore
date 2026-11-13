@@ -1,0 +1,8 @@
+node_modules/
+.env*
+!.env.local.example
+last-frame.jpg
+casting/voices/
+casting/faces-p*.json
+casting/faces/
+agent.log
