@@ -17,7 +17,7 @@ export interface ToolHooks {
   flow?: Flow;
 }
 /** The call's progress, kept in code so Sasha doesn't ask the same thing twice. */
-export interface Flow { done: Set<string>; note(): string | undefined; userTurns: number; said: { text: string; turn: number }[]; /** His latest words. */ his: string; /** His last few lines. */ hisLines: string[]; /** When he last clicked something on the page himself. */ clickedAt: number }
+export interface Flow { done: Set<string>; note(): string | undefined; userTurns: number; said: { text: string; turn: number }[]; /** His latest words. */ his: string; /** His last few lines. */ hisLines: string[]; /** When he last clicked something on the page himself. */ clickedAt: number; /** His sizes once confirmed: tops, waist, shoes. */ sizes: Record<string, string> }
 export function newFlow(): Flow {
   const LABELS: Record<string, string> = {
     new_arrivals: 'shown the new arrivals', vibe_question: 'asked whether he is shopping for an event or occasion',
@@ -33,7 +33,15 @@ export function newFlow(): Flow {
     his: '',
     hisLines: [],
     clickedAt: 0,
-    note: () => (done.size ? `Already done in this call, so never again: ${[...done].map((k) => LABELS[k] ?? k).join('; ')}.` : undefined),
+    sizes: {},
+    note() {
+      const known = Object.entries(this.sizes).map(([k, v]) => `${k} ${v}`).join(', ');
+      const parts = [
+        done.size ? `Already done in this call, so never again: ${[...done].map((k) => LABELS[k] ?? k).join('; ')}.` : '',
+        known ? `His sizes, already confirmed (never ask or read these back again, just use them): ${known}.` : '',
+      ].filter(Boolean);
+      return parts.length ? parts.join(' ') : undefined;
+    },
   };
 }
 
@@ -146,6 +154,22 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     }
     return undefined;
   }
+  // His sizes are asked once per call: tops (shirts, knits, jackets, blazers), waist (pants, shorts), shoes.
+  const sizeKind = (p: any): string | undefined => {
+    if (!p || p.size_type === 'one') return undefined;
+    const slot = catalogSlot(p.id);
+    return slot === 'shoes' ? 'shoes' : slot === 'bottom' || slot === 'swim' ? 'waist' : slot === 'top' || slot === 'layer' || slot === 'suit' || slot === 'one-piece' ? 'tops' : undefined;
+  };
+  // The bit of a size that carries over between pieces: "L - 42" -> "L", "36W | 34-36L" -> "36", "12" -> "12".
+  const sizeCore = (kind: string, size: string) => {
+    const low = norm(size).replace(/extralarge/, 'xl').replace(/extrasmall/, 'xs');
+    const letter = low.match(/^(xxs|xs|s|m|l|xl|xxl|xxxl)\b/);
+    if (kind === 'tops' && letter) return letter[1].toUpperCase();
+    const num = low.match(/\d+(\.5)?/);
+    return num ? num[0] : low.toUpperCase();
+  };
+  const knownSize = (p: any) => { const k = sizeKind(p); return k ? hooks?.flow?.sizes[k] : undefined; };
+  const sameAsKnown = (p: any, size?: string) => { const k = sizeKind(p), known = knownSize(p); return !!(k && known && size && sizeCore(k, size) === known); };
   const heardAt = new Map<string, number>(); // when she was handed it
   const heard = new Map<string, number>(); // "MW-0383:L" -> his turn count when she was told to read it back (or offered it)
   let lastBuild: { budget: number; at: number; run: Promise<unknown> } | null = null;
@@ -307,6 +331,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         hooks?.flow?.done.add('picked');
         return {
           ok: true, name: o.outfit_name, on_his_screen_now: `${o.outfit_name}: talk about this one only, by this name.`, how_it_works: o.why_it_works, total_usd: o.total_usd,
+          sizes_still_needed: [...new Set(o.items.map((it) => sizeKind(byId[it.product_id])).filter((k) => k && !hooks?.flow?.sizes[k!]))],
           pieces_in_order: o.items.map((it, i) => ({ pointer_on_it_at_second: i * PIECE_SECONDS, slot: it.slot, why: it.why, ...details(byId[it.product_id]) })),
           how: `It's on his screen on its own now, with each price and the total. Your pointer moves to each piece in this order, every ${PIECE_SECONDS} seconds, starting now: talk about them in the same order, one or two sentences each, and what makes the pairing work. If he also asked to change a piece (another color, a different shoe), call swap_piece right after this instead of asking. Otherwise end with "Want to see it on you?"`,
           already: hooks?.flow?.note(),
@@ -403,11 +428,14 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         })).describe('Every piece to add, each with its size.'),
       }),
       execute: async ({ sizes_read_back_and_confirmed, outfit_number, items }) => {
-        if (!sizes_read_back_and_confirmed) return { ok: false, error: 'Read his sizes back to him first ("Large blazer, 32 waist, size 10 loafers, right?") and wait for his yes.' };
         items = items.map((it) => ({ ...it, product_id: resolveId(it.product_id, outfit_number) ?? it.product_id }));
+        // Pieces in a size he already confirmed this call need no read-back; a missing size is filled in from his known one.
+        items = items.map((it) => ({ ...it, size: it.size || knownSize(byId[it.product_id]) }));
+        const allKnown = items.every((it) => !byId[it.product_id] || byId[it.product_id].size_type === 'one' || sameAsKnown(byId[it.product_id], it.size));
+        if (!sizes_read_back_and_confirmed && !allKnown) return { ok: false, error: 'Read his sizes back to him first ("Large blazer, 32 waist, size 10 loafers, right?") and wait for his yes.' };
         const slotOf = (id: string) => outfits[(outfit_number ?? picked ?? 1) - 1]?.items.find((it) => it.product_id === id)?.slot ?? byId[id]?.category;
         const missing = items.filter((it) => byId[it.product_id] && byId[it.product_id].size_type !== 'one' && !it.size);
-        if (missing.length) return { ok: false, error: `You don't have his size for: ${missing.map((it) => brief(byId[it.product_id]).title).join(', ')}. Ask him; never guess.` };
+        if (missing.length) return { ok: false, error: `You don't have his size for: ${missing.map((it) => brief(byId[it.product_id]).title).join(', ')}. Ask him for just that; never guess, and never re-ask a size he already gave (${hooks?.flow?.note() ?? ''}).` };
         // The read-back, in code: a piece+size goes in only if she was handed it to read back (or offered it as a
         // swap) and he has spoken since. Otherwise she gets the list to say out loud and must wait for his yes.
         const turns = hooks?.flow?.userTurns ?? 0;
@@ -438,7 +466,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         // Loop breaker: if she was already handed this piece to read back a few seconds ago and calls again saying
         // he confirmed, let it through. One read-back round at most, never a loop.
         const handedAt = new Map<string, number>(heardAt);
-        const unheard = items.filter((it) => byId[it.product_id] && !((heard.get(pair(it)) ?? Infinity) < turns) && !saidIt(it.size) && !(Date.now() - (handedAt.get(pair(it)) ?? Infinity) > 3000));
+        const unheard = items.filter((it) => byId[it.product_id] && !sameAsKnown(byId[it.product_id], it.size) && !((heard.get(pair(it)) ?? Infinity) < turns) && !saidIt(it.size) && !(Date.now() - (handedAt.get(pair(it)) ?? Infinity) > 3000));
         if (unheard.length) {
           for (const it of unheard) if (!heard.has(pair(it))) { heard.set(pair(it), turns); heardAt.set(pair(it), Date.now()); }
           const say = unheard.map((it) => `${it.size ?? 'one size'} ${brief(byId[it.product_id]).title}`).join(', ');
@@ -459,6 +487,8 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           }
           const r = await page('add_to_bag', { id: p.id, size });
           added.push({ ...item(p.id), ok: r.ok, size: r.size ?? size, error: r.error ?? undefined });
+          const kind = sizeKind(p);
+          if (r.ok && kind && hooks?.flow) hooks.flow.sizes[kind] = sizeCore(kind, it.size ?? size);
         }
         const bag = await page('get_bag');
         if (added.some((a) => a.ok)) { await page('open_bag'); hooks?.flow?.done.add('bagged'); }
