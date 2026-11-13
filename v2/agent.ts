@@ -53,8 +53,8 @@ class LiveGemini extends google.beta.realtime.RealtimeModel {
 
 function makeModel() {
   if (GEMINI === 'google') {
-    // Turn-taking: hard to trigger (so Sasha's own voice leaking from speakers doesn't
-    // "interrupt" her), quick to decide you've finished (half a second of silence).
+    // Turn-taking: quick to notice him speaking (even a short "yes"), quick to decide he's finished
+    // (half a second of silence). The browser's echo cancellation keeps her own voice out of his mic.
     return new LiveGemini({
       model: 'gemini-3.8-live',
       voice: VOICE,
@@ -70,7 +70,10 @@ function makeModel() {
       inputAudioTranscription: { languageCodes: ['en-US'], customVocabulary: ['Sasha', 'Fashion Barn'] } as any,
       realtimeInputConfig: {
         automaticActivityDetection: {
-          startOfSpeechSensitivity: 'START_SENSITIVITY_LOW' as any,
+          // HIGH: notices short or quiet answers. With LOW, a quiet "yes" or "office" often never registered,
+          // and she sat silent for 20-50 s until he said something louder (robot test, Nov 13: LOW missed
+          // a 25%-volume "Office"; HIGH caught every line down to 10% volume). START_SENS overrides it.
+          startOfSpeechSensitivity: (process.env.START_SENS ?? 'START_SENSITIVITY_HIGH') as any,
           endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH' as any,
           // 200 ms: tried 400 ms, and the audio got worse in a real call, so back to what worked.
           prefixPaddingMs: Number(process.env.PREFIX_MS ?? 200),
@@ -192,7 +195,7 @@ export default defineAgent({
       lastNudgeAt = Date.now();
       log(`dead air: ${why}`);
       record('nudge', { why });
-      liveSession.sendClientEvent({ type: 'content', value: { turns: [{ role: 'user', parts: [{ text: `APP NOTE (not from the shopper): it's been quiet for a couple of seconds. ${why} Carry on naturally from exactly where you left off. If you just asked him a question, don't ask it again: wait for him. Don't repeat yourself, don't greet him again, and don't mention this note.` }] }], turnComplete: true } });
+      liveSession.sendClientEvent({ type: 'content', value: { turns: [{ role: 'user', parts: [{ text: `APP NOTE (not from the shopper): it's been quiet for a couple of seconds. ${why} Carry on naturally from exactly where you left off, out loud, in plain words. Don't repeat yourself, don't greet him again, and don't mention this note.` }] }], turnComplete: true } });
     }
     const watchdog = setInterval(() => {
       if (process.env.WATCHDOG === 'off' || flow.done.has('closing') || agentState === 'speaking' || userSpeaking || Date.now() - lastNudgeAt < 5000) return;
@@ -246,12 +249,13 @@ export default defineAgent({
     let userStartedAt = 0, wordsAt = 0, answeredStop = 0;
     session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => { if (ev.transcript.trim().length > 1) wordsAt = Date.now(); });
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
-      if (ev.newState === 'speaking') userStartedAt = Date.now();
+      if (ev.newState === 'speaking') { userStartedAt = Date.now(); }
       userSpeaking = ev.newState === 'speaking';
       if (userSpeaking && agentState === 'speaking') record('interrupted', {});
       // No reminder here: a flicker of noise also looks like "he stopped talking". The reminder waits for
       // his actual words (the transcript below), so it never fires while he's still thinking of an answer.
-      if (ev.oldState === 'speaking') { flow.userTurns++; userStoppedAt = Date.now(); }
+      // Blips of a few ms (the detector flickering) aren't a turn: ignore anything under 250 ms.
+      if (ev.oldState === 'speaking' && Date.now() - userStartedAt >= 250) { flow.userTurns++; userStoppedAt = Date.now(); }
     });
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       agentState = ev.newState;

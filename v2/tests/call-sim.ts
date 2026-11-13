@@ -93,8 +93,11 @@ async function waitForSasha(quietMs = 1800, maxMs = 45000) {
 for (const line of LINES) {
   const ok = await waitForSasha();
   if (!ok) log('!! Sasha never finished (or never spoke): sending the next line anyway');
-  log(`YOU: ${line}`);
-  queue = speech(line);
+  // A leading "~" speaks the line quietly (25% volume), "~~" very quietly (10%), like a short mumbled "yes".
+  const quiet = line.startsWith('~~') ? 0.1 : line.startsWith('~') ? 0.25 : 1;
+  const text = line.replace(/^~+/, '');
+  log(`YOU${quiet < 1 ? ` (volume ${quiet * 100}%)` : ''}: ${text}`);
+  queue = speech(text).map((v) => Math.round(v * quiet));
   pos = 0;
   lastLoud = 0;
   while (queue) await sleep(100);
