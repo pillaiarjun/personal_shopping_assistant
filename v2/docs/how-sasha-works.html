@@ -1,0 +1,318 @@
+<title>How Sasha Works</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one wide system map up top (four zones, left to right = shopper to models), then the call as a sequence, the tools, the models. */
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --ink: #15171c; --muted: #5a6170; --rule: #dcdfe5; --arrow: #6b7280;
+  --z1: #eef1f6; --z1s: #7d879a;   /* shopper's browser */
+  --z2: #e4f4ef; --z2s: #24947c;   /* LiveKit */
+  --z3: #fbf0e0; --z3s: #c07f1f;   /* EasyPanel container */
+  --z4: #e9effd; --z4s: #3767d8;   /* Google Gemini */
+  --accent: #3767d8;
+  --display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --body: "Instrument Sans", "Helvetica Neue", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #101216; --surface: #1a1d23; --ink: #eceef2; --muted: #9aa2b1; --rule: #2c3038; --arrow: #8d95a4;
+  --z1: #1a1e26; --z1s: #8892a6; --z2: #12241f; --z2s: #3fbf9f; --z3: #2a2014; --z3s: #e0a54a; --z4: #151d33; --z4s: #6f97f5;
+  --accent: #6f97f5; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #101216; --surface: #1a1d23; --ink: #eceef2; --muted: #9aa2b1; --rule: #2c3038; --arrow: #8d95a4;
+  --z1: #1a1e26; --z1s: #8892a6; --z2: #12241f; --z2s: #3fbf9f; --z3: #2a2014; --z3s: #e0a54a; --z4: #151d33; --z4s: #6f97f5;
+  --accent: #6f97f5; color-scheme: dark }
+
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 40px 64px; }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 56px; }
+h1, h2 { font-family: var(--display); font-weight: 700; letter-spacing: -0.01em; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.05; }
+h2 { font-size: 24px; }
+p { margin: 0; max-width: 68ch; }
+a { color: var(--accent); }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+header { display: grid; gap: 14px; }
+.lede { font-size: 17px; color: var(--muted); }
+.links { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 14px; }
+
+/* the map */
+.map { background: var(--surface); border: 1px solid var(--rule); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
+.map-scroll { overflow-x: auto; }
+.map svg { display: block; width: 100%; min-width: 940px; height: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { width: 22px; border-top: 2px solid var(--arrow); }
+.legend i.dash { border-top-style: dashed; }
+svg text { font-family: var(--body); fill: var(--ink); }
+svg .t { font-size: 13.5px; font-weight: 600; }
+svg .s { font-size: 11.5px; fill: var(--muted); }
+svg .f { font-family: var(--mono); font-size: 10.5px; fill: var(--muted); }
+svg .zl { font-family: var(--display); font-size: 14px; font-weight: 700; }
+svg .lbl { font-size: 11px; fill: var(--muted); paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.z1 { fill: var(--z1); stroke: var(--z1s); } .z2 { fill: var(--z2); stroke: var(--z2s); }
+.z3 { fill: var(--z3); stroke: var(--z3s); } .z4 { fill: var(--z4); stroke: var(--z4s); }
+.zone { stroke-width: 1.2; stroke-dasharray: 5 4; }
+.box { fill: var(--surface); stroke-width: 1.4; }
+.b1 { stroke: var(--z1s); } .b2 { stroke: var(--z2s); } .b3 { stroke: var(--z3s); } .b4 { stroke: var(--z4s); }
+.zt1 { fill: var(--z1s); } .zt2 { fill: var(--z2s); } .zt3 { fill: var(--z3s); } .zt4 { fill: var(--z4s); }
+.ln { fill: none; stroke: var(--arrow); stroke-width: 1.6; }
+.ln.dash { stroke-dasharray: 5 4; }
+.head { fill: var(--arrow); }
+
+/* call sequence */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; counter-reset: s; }
+.steps li { counter-increment: s; background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; padding: 14px 16px; display: grid; gap: 4px; min-width: 0; }
+.steps li::before { content: counter(s); font-family: var(--display); font-weight: 700; font-size: 20px; color: var(--accent); }
+.steps b { font-weight: 600; }
+.steps p { color: var(--muted); font-size: 14px; }
+section { display: grid; gap: 18px; }
+
+/* tools + models */
+.tools { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 28px; }
+.tools div { display: grid; gap: 2px; padding: 12px 0; border-top: 1px solid var(--rule); min-width: 0; }
+.tools code { color: var(--ink); font-weight: 500; }
+.tools p { color: var(--muted); font-size: 14px; }
+.tbl { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 620px; }
+th, td { text-align: left; padding: 10px 12px 10px 0; border-top: 1px solid var(--rule); vertical-align: top; }
+th { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border-top: 0; }
+td:first-child { font-weight: 600; white-space: nowrap; }
+.pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--rule); color: var(--muted); white-space: nowrap; }
+.pill.paid { border-color: var(--z3s); color: var(--z3s); }
+.pill.off { border-style: dashed; }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.notes div { border-left: 3px solid var(--rule); padding: 2px 0 2px 14px; display: grid; gap: 4px; }
+.notes b { font-weight: 600; }
+.notes p { color: var(--muted); font-size: 14px; }
+footer { font-size: 13px; color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Sasha V2 · Fashion Barn</div>
+    <h1>How Sasha works</h1>
+    <p class="lede">Sasha is a live video stylist inside the Fashion Barn store. You talk to her over your mic and camera. She talks back, drives the store page on your screen, builds outfits from the catalog and shows you wearing them. This page maps every moving part.</p>
+    <div class="links">
+      <a href="https://podsized2-sasha.01xa7y.easypanel.host/" target="_blank" rel="noopener">Try it: the live store</a>
+      <a href="https://github.com/pillaiarjun/personal_shopping_assistant/tree/v2/v2" target="_blank" rel="noopener">Code: branch v2, folder v2/</a>
+    </div>
+  </header>
+
+  <div class="map">
+    <div class="map-scroll">
+    <svg viewBox="0 0 1100 610" role="img" aria-labelledby="map-title">
+      <title id="map-title">Architecture: the shopper's browser talks to LiveKit; the agent worker on EasyPanel joins the same room, talks to Gemini Live, runs store tools, and calls other Gemini models for search, outfits and try-on pictures.</title>
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="head" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+
+      <!-- zones -->
+      <text class="zl zt1" x="16" y="44">Your browser</text>
+      <rect class="zone z1" x="16" y="56" width="232" height="530" rx="14"/>
+      <text class="zl zt2" x="286" y="44">LiveKit Cloud</text>
+      <rect class="zone z2" x="286" y="56" width="200" height="530" rx="14"/>
+      <text class="zl zt3" x="526" y="44">EasyPanel server</text>
+      <rect class="zone z3" x="526" y="56" width="292" height="530" rx="14"/>
+      <text class="zl zt4" x="856" y="44">Google Gemini</text>
+      <rect class="zone z4" x="856" y="56" width="228" height="530" rx="14"/>
+
+      <!-- browser -->
+      <rect class="box b1" x="32" y="110" width="200" height="92" rx="10"/>
+      <text class="t" x="46" y="136">Fashion Barn store</text>
+      <text class="s" x="46" y="156">Products, looks board, bag</text>
+      <text class="s" x="46" y="172">Your-pick page, try-on reveal</text>
+      <text class="f" x="46" y="190">site/</text>
+
+      <rect class="box b1" x="32" y="250" width="200" height="92" rx="10"/>
+      <text class="t" x="46" y="276">Sasha widget</text>
+      <text class="s" x="46" y="296">Call window, her pointer,</text>
+      <text class="s" x="46" y="312">runs her page actions</text>
+      <text class="f" x="46" y="330">web/sasha-live.ts</text>
+
+      <rect class="box b1" x="32" y="392" width="200" height="66" rx="10"/>
+      <text class="t" x="46" y="418">Your camera + mic</text>
+      <text class="s" x="46" y="438">Your face, voice, held-up clothes</text>
+
+      <!-- livekit -->
+      <rect class="box b2" x="302" y="110" width="168" height="80" rx="10"/>
+      <text class="t" x="316" y="136">RPC "barn"</text>
+      <text class="s" x="316" y="156">Agent tells the page</text>
+      <text class="s" x="316" y="172">what to do, page replies</text>
+
+      <rect class="box b2" x="302" y="232" width="168" height="112" rx="10"/>
+      <text class="t" x="316" y="258">Call room</text>
+      <text class="s" x="316" y="278">Real-time voice + video</text>
+      <text class="s" x="316" y="294">(WebRTC) between you</text>
+      <text class="s" x="316" y="310">and the agent</text>
+      <text class="f" x="316" y="330">room per call</text>
+
+      <rect class="box b2" x="302" y="408" width="168" height="118" rx="10" stroke-dasharray="5 4"/>
+      <text class="t" x="316" y="434">Tavus video face</text>
+      <text class="s" x="316" y="454">Optional: "Video face"</text>
+      <text class="s" x="316" y="470">switch. Joins the room,</text>
+      <text class="s" x="316" y="486">lip-syncs Olivia's face</text>
+      <text class="s" x="316" y="502">to Sasha's voice</text>
+      <path class="ln dash" d="M386,408 V348" marker-start="url(#ah)" marker-end="url(#ah)"/>
+      <text class="lbl" x="386" y="372" text-anchor="middle">her voice in</text>
+      <text class="lbl" x="386" y="388" text-anchor="middle">face + voice out</text>
+
+      <!-- container -->
+      <rect class="box b3" x="542" y="96" width="260" height="72" rx="10"/>
+      <text class="t" x="556" y="120">Web server</text>
+      <text class="s" x="556" y="139">Store page, call sign-in token,</text>
+      <text class="s" x="556" y="155">try-on pictures · <tspan class="f">server.ts</tspan></text>
+
+      <rect class="box b3" x="542" y="200" width="260" height="96" rx="10"/>
+      <text class="t" x="556" y="224">Agent worker</text>
+      <text class="s" x="556" y="243">Joins each call as Sasha. Her script,</text>
+      <text class="s" x="556" y="259">quiet-timer nudges, camera snapshot,</text>
+      <text class="s" x="556" y="275">call logs · <tspan class="f">agent.ts, sasha-prompt.md</tspan></text>
+
+      <rect class="box b3" x="542" y="322" width="260" height="70" rx="10"/>
+      <text class="t" x="556" y="346">Store tools</text>
+      <text class="s" x="556" y="365">10 tools Gemini can call: search,</text>
+      <text class="s" x="556" y="381">outfits, try-on, bag · <tspan class="f">store-tools.ts</tspan></text>
+
+      <rect class="box b3" x="542" y="410" width="260" height="50" rx="10"/>
+      <text class="t" x="556" y="432">Search + outfit builder</text>
+      <text class="f" x="556" y="450">store.ts</text>
+
+      <rect class="box b3" x="542" y="470" width="260" height="44" rx="10"/>
+      <text class="t" x="556" y="490">Virtual try-on</text>
+      <text class="f" x="556" y="506">tryon.ts</text>
+
+      <rect class="box b3" x="542" y="528" width="260" height="44" rx="10"/>
+      <text class="t" x="556" y="548">Catalog files</text>
+      <text class="s" x="556" y="564">1,046 products, tags, vectors, outfit library</text>
+
+      <!-- gemini -->
+      <text class="s" x="872" y="88">Free-tier key: everything but try-on</text>
+      <text class="s" x="872" y="104">Paid key: try-on pictures only</text>
+
+      <rect class="box b4" x="872" y="200" width="196" height="96" rx="10"/>
+      <text class="t" x="886" y="224">Gemini 3.8 Live</text>
+      <text class="s" x="886" y="243">Sasha's voice and brain.</text>
+      <text class="s" x="886" y="259">Hears you, sees your camera,</text>
+      <text class="s" x="886" y="275">calls tools · voice Achernar</text>
+
+      <rect class="box b4" x="872" y="350" width="196" height="46" rx="10"/>
+      <text class="t" x="886" y="370">Embedding 001</text>
+      <text class="s" x="886" y="387">Meaning-based search</text>
+
+      <rect class="box b4" x="872" y="410" width="196" height="50" rx="10"/>
+      <text class="t" x="886" y="431">3.5 Flash-Lite</text>
+      <text class="s" x="886" y="449">Live outfits, photo notes</text>
+
+      <rect class="box b4" x="872" y="470" width="196" height="44" rx="10"/>
+      <text class="t" x="886" y="490">Nano Banana 2</text>
+      <text class="s" x="886" y="506">Pictures you in the outfit</text>
+
+      <rect class="box b4" x="872" y="528" width="196" height="44" rx="10" stroke-dasharray="5 4"/>
+      <text class="t" x="886" y="548">Gemini 4 Hydrogen</text>
+      <text class="s" x="886" y="564">Pre-builds outfits daily</text>
+
+      <!-- arrows: media -->
+      <path class="ln" d="M132,392 V346" marker-end="url(#ah)"/>
+      <path class="ln" d="M232,296 H298" marker-start="url(#ah)" marker-end="url(#ah)"/>
+      <text class="lbl" x="265" y="288" text-anchor="middle">voice, video</text>
+      <path class="ln" d="M470,276 H538" marker-start="url(#ah)" marker-end="url(#ah)"/>
+      <text class="lbl" x="504" y="268" text-anchor="middle">voice, video</text>
+      <path class="ln" d="M802,248 H868" marker-start="url(#ah)" marker-end="url(#ah)"/>
+      <text class="lbl" x="835" y="240" text-anchor="middle">audio, frames</text>
+      <text class="lbl" x="835" y="266" text-anchor="middle">tool calls</text>
+
+      <!-- arrows: tools and page actions -->
+      <path class="ln" d="M672,296 V318" marker-end="url(#ah)"/>
+      <path class="ln" d="M542,357 H508 V150 H474" marker-end="url(#ah)"/>
+      <text class="lbl" x="508" y="214" text-anchor="middle">page</text>
+      <text class="lbl" x="508" y="228" text-anchor="middle">actions</text>
+      <path class="ln" d="M302,150 H236" marker-end="url(#ah)"/>
+      <text class="lbl" x="269" y="142" text-anchor="middle">show, point</text>
+      <path class="ln" d="M672,392 V406" marker-end="url(#ah)"/>
+      <path class="ln" d="M542,380 H533 V492 H538" marker-end="url(#ah)"/>
+
+      <!-- arrows: models -->
+      <path class="ln" d="M802,425 H838 V373 H868" marker-end="url(#ah)"/>
+      <path class="ln" d="M802,440 H868" marker-end="url(#ah)"/>
+      <path class="ln" d="M802,492 H868" marker-end="url(#ah)"/>
+      <path class="ln dash" d="M872,550 H806" marker-end="url(#ah)"/>
+
+      <!-- arrow: web server to browser -->
+      <path class="ln" d="M542,118 H516 V78 H132 V106" marker-end="url(#ah)"/>
+      <text class="lbl" x="330" y="82" text-anchor="middle">store page, sign-in token, try-on pictures</text>
+    </svg>
+    </div>
+    <div class="legend">
+      <span><i></i>during a call</span>
+      <span><i class="dash"></i>optional or ahead of time: the Tavus face (when switched on), the outfit library (built once a day)</span>
+      <span>Scroll sideways on a phone to see the whole map.</span>
+    </div>
+  </div>
+
+  <section>
+    <div class="eyebrow">One call, start to finish</div>
+    <h2>What happens when you press "Talk to Sasha"</h2>
+    <ol class="steps">
+      <li><b>Sign in to the call</b><p>The widget asks the web server for a LiveKit token and joins a fresh call room with your camera and mic. The token carries your "Video face" choice.</p></li>
+      <li><b>Sasha joins</b><p>LiveKit sends the call to the agent worker on EasyPanel. It opens a Gemini 3.8 Live session with Sasha's script and the store tools. With the video face on, it also brings Tavus into the room, and Olivia's face speaks her lines; otherwise you hear her voice with her photo.</p></li>
+      <li><b>She talks and looks</b><p>Your voice and camera frames stream to Gemini Live, which answers in Sasha's voice. She sees what you wear or hold up.</p></li>
+      <li><b>She drives the page</b><p>When she calls a tool, the worker sends a page action over LiveKit's "barn" channel. The widget shows products, points, scrolls or opens the bag, and the call window shrinks into the sidebar.</p></li>
+      <li><b>Outfits in seconds</b><p>build_outfits uses a ready-made library look when one fits your occasion and budget (instant). Otherwise Flash-Lite builds three new outfits live, each 4 to 6 pieces with an accessory and within budget.</p></li>
+      <li><b>You, wearing it</b><p>While you look at the outfits, Nano Banana 2 dresses your camera snapshot in each one. The picture is ready by the time you pick.</p></li>
+      <li><b>Into the bag</b><p>She asks your sizes, adds the pieces to the store's bag and walks you to checkout.</p></li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="eyebrow">Her tools</div>
+    <h2>What Sasha can do in the store</h2>
+    <div class="tools">
+      <div><code>search_products</code><p>Finds items by meaning ("something in linen") and shows them.</p></div>
+      <div><code>show_new_arrivals</code><p>Puts the latest pieces on screen.</p></div>
+      <div><code>show_product</code><p>Opens one product and walks through its photos with her pointer.</p></div>
+      <div><code>point_at</code><p>Moves her cursor to a part of the page, and can click it.</p></div>
+      <div><code>scroll_page</code><p>Scrolls you to a section.</p></div>
+      <div><code>build_outfits</code><p>Three complete outfits for the occasion and budget, or built around a piece you hold up.</p></div>
+      <div><code>pick_outfit</code><p>Opens the outfit you chose, piece by piece.</p></div>
+      <div><code>show_on_me</code><p>Reveals the try-on picture of you in it.</p></div>
+      <div><code>swap_piece</code><p>Trades one piece for another and updates the total.</p></div>
+      <div><code>add_to_bag</code><p>Adds a piece in your size to the bag.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">The models</div>
+    <h2>Which Gemini model does what</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Model</th><th>Job</th><th>When</th><th>Key</th></tr></thead>
+        <tbody>
+          <tr><td>Gemini 3.8 Live</td><td>Sasha herself: listens, sees, speaks (voice Achernar), decides which tool to call</td><td>The whole call</td><td><span class="pill">free tier</span></td></tr>
+          <tr><td>Embedding 001</td><td>Turns requests and products into vectors so search matches meaning, not just words</td><td>Each search or outfit build</td><td><span class="pill">free tier</span></td></tr>
+          <tr><td>3.5 Flash-Lite</td><td>Builds outfits live when no library look fits; writes notes on each product photo for her walkthrough. Falls back to 3.1 Flash-Lite, then 3.5 Flash, when busy</td><td>Outfits, product pages</td><td><span class="pill">free tier</span></td></tr>
+          <tr><td>Nano Banana 2</td><td>Makes the picture of you in each outfit, keeping any piece of your own</td><td>Right after outfits appear</td><td><span class="pill paid">paid</span></td></tr>
+          <tr><td>Gemini 4 Hydrogen</td><td>Pre-builds the outfit library: 10 occasions × 3 budgets × men's and women's</td><td>Once a day, offline</td><td><span class="pill off">free tier, 20 a day</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Under the hood</div>
+    <h2>Details that keep calls smooth</h2>
+    <div class="notes">
+      <div><b>Video face switch</b><p>A "Video face" switch above "Talk to Sasha" turns the Tavus face on for that call. It starts off (voice only); the server's AVATAR setting changes the default, with no code change. Your browser remembers your choice.</p></div>
+      <div><b>Quiet-timer</b><p>If the line goes quiet when it's Sasha's turn, the worker nudges Gemini to keep going. After she asks a question it waits longer, so you have time to think.</p></div>
+      <div><b>Build around your piece</b><p>Hold up a shirt and every outfit keeps it. The try-on copies it from the camera frame taken while you showed it.</p></div>
+      <div><b>Budget guard</b><p>Each outfit's total is checked against your budget. Pieces that run a little over get swapped for cheaper ones in the same slot.</p></div>
+      <div><b>Occasion check</b><p>The builder works out how dressy the event is from the catalog and keeps clearly-too-casual clothes out.</p></div>
+      <div><b>One worker</b><p>Everything runs in one EasyPanel container: the web server and the agent worker. Each push to the v2 branch is redeployed from the Dockerfile.</p></div>
+      <div><b>Call logs</b><p>Each call writes a line-by-line log (what was said, tools, nudges) for reviewing glitches afterwards.</p></div>
+    </div>
+  </section>
+
+  <footer>Built on LiveKit Agents (Node), its Tavus avatar plugin and the Google Gen AI SDK. Store front end: Fashion Barn (site/). Map reflects branch v2 as of November 13, 2026.</footer>
+</div>

@@ -37,7 +37,14 @@ body.sl-nobar{padding-right:0!important}
 .sl-corner .sl-center{padding:0 12px 84px;gap:8px}
 .sl-face{position:relative;width:min(38vh,320px);aspect-ratio:1;border-radius:50%;transition:all .6s cubic-bezier(.2,.8,.2,1)}
 .sl-corner .sl-face{width:120px}
-.sl-face img{width:100%;height:100%;border-radius:50%;object-fit:cover;position:relative;z-index:1}
+.sl-face img,.sl-face video{width:100%;height:100%;border-radius:50%;object-fit:cover;position:relative;z-index:1}
+.sl-face video{position:absolute;inset:0;z-index:2;background:#0e0e10}
+.sl-face-toggle{position:fixed;right:24px;bottom:94px;z-index:450;display:flex;align-items:center;gap:8px;padding:6px 12px 6px 8px;border:1px solid rgba(0,0,0,.12);border-radius:999px;background:#fff;color:#111;font:500 13px/1 "Hanken Grotesk",system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.12)}
+.sl-face-toggle i{width:28px;height:16px;border-radius:999px;background:#c9c9c9;position:relative;transition:background .2s}
+.sl-face-toggle i::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:transform .2s}
+.sl-face-toggle[aria-checked="true"] i{background:#2f7d4f}
+.sl-face-toggle[aria-checked="true"] i::after{transform:translateX(12px)}
+.sl-face-toggle:focus-visible,.sl-launch:focus-visible{outline:2px solid #d4664a;outline-offset:3px}
 .sl-face::before{content:"";position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle,rgba(255,196,140,.55),rgba(255,120,90,0) 70%);opacity:0;transform:scale(.9);transition:opacity .25s,transform .25s}
 .sl-speaking .sl-face::before{opacity:1;transform:scale(1.12);animation:sl-pulse 1.1s ease-in-out infinite}
 @keyframes sl-pulse{50%{transform:scale(1.2)}}
@@ -111,6 +118,29 @@ const sashaImg = new URL('./sasha-olivia.jpg', import.meta.url).href; // Olivia,
 const launch = el('button', 'sl-launch', `<img src="${sashaImg}" alt=""><span>Talk to Sasha</span>`);
 launch.type = 'button';
 document.body.append(launch);
+
+// ---- video face (Tavus) switch, chosen before the call ----
+// The server says whether the face can run (Tavus key set) and whether it starts on (AVATAR=tavus).
+// His own choice is remembered in this browser and overrides the default.
+const faceToggle = el('button', 'sl-face-toggle', '<i aria-hidden="true"></i><span>Video face</span>');
+faceToggle.type = 'button';
+faceToggle.setAttribute('role', 'switch');
+faceToggle.hidden = true;
+document.body.append(faceToggle);
+let faceOn = false;
+const setFace = (on: boolean) => { faceOn = on; faceToggle.setAttribute('aria-checked', String(on)); faceToggle.title = on ? 'Sasha appears as a live video face' : 'Voice only, with her photo'; };
+setFace(false);
+faceToggle.addEventListener('click', () => {
+  setFace(!faceOn);
+  try { localStorage.setItem('sasha-face', faceOn ? 'on' : 'off'); } catch {}
+});
+fetch(`${SERVER}/config`).then((r) => r.json()).then((c: { avatar_available?: boolean; avatar_default?: boolean }) => {
+  if (!c.avatar_available) return;
+  let saved: string | null = null;
+  try { saved = localStorage.getItem('sasha-face'); } catch {}
+  setFace(saved ? saved === 'on' : !!c.avatar_default);
+  faceToggle.hidden = launch.hidden;
+}).catch(() => {});
 // The store's "Your stylist" sidebar stays hidden until Sasha shrinks. Then, on wide screens, the
 // sidebar comes back and she docks into its video spot; on small screens she sits in the corner.
 document.body.classList.add('sl-nobar');
@@ -415,6 +445,7 @@ async function onBarn(data: RpcInvocationData) {
 // ---- the call ----
 async function start() {
   launch.hidden = true;
+  faceToggle.hidden = true;
   stage = el('div', 'sl-stage sl-full', `
     <div class="sl-center">
       <div class="sl-face"><img src="${sashaImg}" alt="Sasha"></div>
@@ -429,11 +460,16 @@ async function start() {
   stage.querySelector('.sl-end')!.addEventListener('click', end);
 
   try {
-    const { url, token } = await (await fetch(`${SERVER}/token`)).json();
+    const { url, token } = await (await fetch(`${SERVER}/token?avatar=${faceOn ? 'tavus' : 'none'}`)).json();
     room = new Room({ adaptiveStream: true, dynacast: true });
     room.registerRpcMethod('barn', onBarn);
     room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => {
       if (track.kind === Track.Kind.Audio) document.body.append(Object.assign(track.attach(), { className: 'sl-audio' }));
+      // The Tavus face: its video takes the place of her photo in the call window.
+      if (track.kind === Track.Kind.Video) {
+        const face = stage?.querySelector('.sl-face');
+        if (face) { face.querySelector('video')?.remove(); face.append(Object.assign(track.attach() as HTMLVideoElement, { muted: true, playsInline: true })); }
+      }
     });
     room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
       const agentTalking = speakers.some((p) => p.identity !== room?.localParticipant.identity);
@@ -490,6 +526,7 @@ async function end() {
   stage = null;
   hideReveal();
   launch.hidden = false;
+  fetch(`${SERVER}/config`).then((r) => r.json()).then((c) => { faceToggle.hidden = !c.avatar_available; }).catch(() => {});
   document.body.classList.add('sl-nobar');
   shrunk = false;
 }

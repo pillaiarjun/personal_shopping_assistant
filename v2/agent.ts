@@ -3,7 +3,8 @@
 // Run:   node agent.ts dev   and   node server.ts, then open the store (site/) and press Talk to Sasha.
 //
 // Switches in .env.local:
-//   AVATAR=tavus | none     (default none: voice only)
+//   AVATAR=tavus | none     where the store's "Video face" switch starts (default none: voice only).
+//                           Each shopper's own switch wins; the face needs TAVUS_API_KEY.
 //   GEMINI=inference | google
 //        inference = Gemini through LiveKit Cloud, needs only LIVEKIT_* keys (default)
 //        google    = your own GOOGLE_API_KEY
@@ -411,8 +412,12 @@ export default defineAgent({
     const frameTimer = setInterval(streamFrame, 1000);
     ctx.addShutdownCallback(async () => clearInterval(frameTimer));
 
-    // --- Face.
-    if (AVATAR === 'tavus') {
+    // --- Face: his "Video face" switch (sent on his token), else the AVATAR default.
+    const shopper = await Promise.race([ctx.waitForParticipant(), new Promise<null>((r) => setTimeout(() => r(null), 5000))]);
+    const choice = shopper?.attributes?.avatar ?? AVATAR;
+    const face = choice === 'tavus' && !!process.env.TAVUS_API_KEY;
+    log(`face: ${face ? 'Tavus video' : 'voice only'} (shopper chose ${shopper?.attributes?.avatar ?? 'nothing'}, default ${AVATAR})`);
+    if (face) {
       const avatar = new tavus.AvatarSession({
         faceId: process.env.TAVUS_FACE_ID || undefined,
         palId: process.env.TAVUS_PAL_ID || undefined,

@@ -1,5 +1,6 @@
 // Small local server for the V2 call page (run next to the agent):  node server.ts
 //   GET /token       a LiveKit token for a new shopper room (the agent joins it on its own)
+//   GET /config      { avatar_available, avatar_default } for the widget's video-face switch
 //   GET /tryon/<f>   try-on images the agent made during the call
 //   GET /            the store page (site/) with Sasha, for a hosted server (Easypanel): one address for everything
 import dotenv from 'dotenv';
@@ -21,10 +22,17 @@ createServer(async (req, res) => {
   try {
     if (url.pathname === '/token') {
       const room = `sasha-${Date.now().toString(36)}`;
-      const at = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, { identity: `shopper-${room}`, ttl: '1h' });
+      // His video-face choice rides along on his token; the agent reads it when he joins.
+      const avatar = url.searchParams.get('avatar') === 'tavus' && process.env.TAVUS_API_KEY ? 'tavus' : 'none';
+      const at = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, { identity: `shopper-${room}`, ttl: '1h', attributes: { avatar } });
       at.addGrant({ room, roomJoin: true, canPublish: true, canSubscribe: true, canPublishData: true });
       res.setHeader('Content-Type', 'application/json');
       return res.end(JSON.stringify({ url: process.env.LIVEKIT_URL, token: await at.toJwt(), room }));
+    }
+    // What the Sasha widget needs before a call: can the video face run, and does it start on?
+    if (url.pathname === '/config') {
+      res.setHeader('Content-Type', 'application/json');
+      return res.end(JSON.stringify({ avatar_available: !!process.env.TAVUS_API_KEY, avatar_default: process.env.AVATAR === 'tavus' }));
     }
     if (url.pathname.startsWith('/tryon/')) {
       const file = await readFile(new URL(`./tryon/${basename(url.pathname)}`, import.meta.url));
