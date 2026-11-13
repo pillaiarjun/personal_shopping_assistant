@@ -3,7 +3,7 @@
 // method "barn" (handled in web/sasha-live.ts, which calls window.Barn in site/barn.js).
 import { type JobContext, llm } from '@livekit/agents';
 import { z } from 'zod';
-import { brief, buildOutfits, byId, describePhotos, details, search, type Outfit } from './store.ts';
+import { brief, buildOutfits, byId, describePhotos, details, search, type Outfit, type PhotoNote } from './store.ts';
 import { readSnapshot, tryOn } from './tryon.ts';
 
 type Log = (msg: string, extra?: unknown) => void;
@@ -89,7 +89,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
 
   let openId = '';
   let tourTimer: ReturnType<typeof setTimeout> | undefined;
-  const PHOTO_SECONDS = 5;
+  const PHOTO_SECONDS = 6;
   const PIECE_SECONDS = 6;
   /** Runs page steps one after another, a few seconds apart, while Sasha talks. A new tour cancels the old one. */
   function tour(steps: (() => Promise<unknown>)[], gapMs: number) {
@@ -193,16 +193,25 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         if (!p || !product_id) return { ok: false, error: `No product "${ref}". Use a product_id like MW-0383 from an earlier result.` };
         const out = await page('open_product', { id: product_id });
         openId = product_id;
-        const notes = await describePhotos(p).catch(() => [] as string[]);
+        const notes = await describePhotos(p).catch(() => [] as PhotoNote[]);
         const n = Math.min(4, p.images.length);
-        const steps = [...Array(n).keys()].map((i) => () => (openId === product_id ? page('show_photo', { index: i }) : Promise.resolve()));
-        steps.push(() => (openId === product_id ? page('point', { target: p.details?.length ? 'details' : 'description' }) : Promise.resolve()));
-        await tour(steps, PHOTO_SECONDS * 1000);
+        // Every photo gets PHOTO_SECONDS on screen; inside that, the pointer glides over its details
+        // (up to two, ~1.8 s and ~4 s in), with a small magnifier, while she talks about them.
+        const live = () => openId === product_id;
+        const steps: (() => Promise<unknown>)[] = [];
+        for (let i = 0; i < n; i++) {
+          const spots = (notes[i]?.spots ?? []).slice(0, 2);
+          steps.push(() => (live() ? page('show_photo', { index: i }) : Promise.resolve()));
+          steps.push(() => (live() && spots[0] ? page('hover_photo', spots[0]) : Promise.resolve()));
+          steps.push(() => (live() && spots[1] ? page('hover_photo', spots[1]) : Promise.resolve()));
+        }
+        steps.push(() => (live() ? page('point', { target: p.details?.length ? 'details' : 'description' }) : Promise.resolve()));
+        await tour(steps, (PHOTO_SECONDS * 1000) / 3);
         return {
           ok: true, ...details(p), sizes_in_stock: out.sizes, colors: out.colors,
-          photos: notes.slice(0, n).map((what_it_shows, i) => ({ photo: i + 1, on_screen_at_second: i * PHOTO_SECONDS, what_it_shows })),
+          photos: notes.slice(0, n).map((note, i) => ({ photo: i + 1, on_screen_at_second: i * PHOTO_SECONDS, what_it_shows: note.say, pointer_glides_over: note.spots?.slice(0, 2).map((s) => s.detail) })),
           product_copy: p.description, product_details: p.details?.slice(0, 6),
-          how: `Photo 1 is on his screen now. The page moves to the next photo every ${PHOTO_SECONDS} seconds, then scrolls to the product details at second ${n * PHOTO_SECONDS}. Start talking right away and keep going: about two short sentences per photo on the fine details it shows, in order, so your words match what he sees, then one line on a detail from the product details. Then ask what he thinks.`,
+          how: `Photo 1 is on his screen now. The page moves to the next photo every ${PHOTO_SECONDS} seconds, and on each one your pointer glides over the details listed for it, in that order, so name them as it does, then scrolls to the product details at second ${n * PHOTO_SECONDS}. Start talking right away and keep going: about two short sentences per photo on the fine details it shows, in order, so your words match what he sees, then one line on a detail from the product details. Then ask what he thinks.`,
           already: hooks?.flow?.note(),
         };
       },
@@ -272,7 +281,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           const file = await picture(i);
           await page('tryon_show', { file, title: outfits[i].outfit_name });
           hooks?.flow?.done.add('reveal');
-          return { ok: true, shown: outfits[i].outfit_name, already: hooks?.flow?.note() };
+          return { ok: true, shown: outfits[i].outfit_name, how: 'He is looking at himself in it right now: react to it straight away, like a friend would.', already: hooks?.flow?.note() };
         } catch (e) {
           await page('tryon_hide');
           return { ok: false, error: (e as Error).message };
@@ -315,7 +324,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           for (const it of unheard) if (!heard.has(pair(it))) heard.set(pair(it), turns);
           const say = unheard.map((it) => `${it.size ?? 'one size'} ${brief(byId[it.product_id]).title}`).join(', ');
           const left = outfit_number ? outfits[outfit_number - 1]?.items.filter((o) => !items.some((it) => it.product_id === o.product_id)).map((o) => brief(byId[o.product_id]).title) : [];
-          return { ok: false, left_out_of_this_call: left?.length ? left : undefined, not_yet: `Nothing added yet. Read this back to him in your own words and wait for his yes: ${say}. When he says yes, call add_to_bag again with the same pieces and sizes.` };
+          return { ok: false, left_out_of_this_call: left?.length ? left : undefined, not_yet: `Nothing is in his bag yet, so never say it is. Read this back to him in your own words and wait for his yes: ${say}. When he says yes, call add_to_bag again with the same pieces and sizes.` };
         }
         const added = [], sold_out = [];
         for (const it of items) {
@@ -344,13 +353,23 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     }),
   };
   // Every tool tells the agent when it starts and ends (agent.ts pauses the camera stream meanwhile).
+  // Gemini sometimes fires the same call twice within a second (the photo tour then ran twice):
+  // a repeat with the same arguments within 4 s gets the first call's result.
+  const recent = new Map<string, { at: number; out: Promise<unknown> }>();
   for (const t of Object.values(tools) as any[]) {
     const run = t.execute;
     t.execute = async (...args: any[]) => {
       const name = Object.keys(tools).find((k) => (tools as any)[k] === t)!;
+      const key = name + JSON.stringify(args[0] ?? {});
+      const prev = recent.get(key);
+      if (prev && Date.now() - prev.at < 4000 && name !== 'add_to_bag') { log(`tool ${name} repeated, skipped`); return { ...(await prev.out as object), note: 'Same call a moment ago; it is already on his screen.' }; }
+      const p = (async () => {
       hooks?.start(name, args[0]);
       let out: unknown;
       try { out = await run(...args); return out; } finally { hooks?.end(name, out); }
+      })();
+      recent.set(key, { at: Date.now(), out: p });
+      return p;
     };
   }
   return tools;

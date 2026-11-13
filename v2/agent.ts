@@ -31,7 +31,7 @@ const FRAME_WIDTH = Number(process.env.FRAME_WIDTH ?? 768);
 
 // The full Sasha prompt (sasha-prompt.md); the store tools are in store-tools.ts.
 const INSTRUCTIONS = readFileSync(new URL('./sasha-prompt.md', import.meta.url), 'utf8');
-const GREETING = "Hey, I'm Sasha, your AI stylist here at Fashion Barn. Here's the deal: I get to know you, check out what you've got on, then I pull looks from our racks and show you how they look on you. What's your name?";
+const GREETING = "Hey, I'm Sasha from Fashion Barn, and I'm here to help you get dressed. Let me get a good look at you. What's your name?";
 
 // Gemini Live takes camera frames on its `video` input. The plugin sends them as `media`,
 // which gemini-3.8-live ignores (tested), so re-label image chunks as video.
@@ -64,14 +64,16 @@ function makeModel() {
       // free (WHEN_IDLE). With blocking tools Gemini often went silent after the result.
       toolBehavior: Behavior.NON_BLOCKING,
       toolResponseScheduling: FunctionResponseScheduling.WHEN_IDLE,
+      // THINKING_BUDGET=<tokens> limits her thinking before answering. Off by default: with 0, gemini-3.8-live
+      // went completely silent (tested Nov 13), so only set it to try other values.
+      ...(process.env.THINKING_BUDGET ? { thinkingConfig: { thinkingBudget: Number(process.env.THINKING_BUDGET) } } : {}),
       inputAudioTranscription: { languageCodes: ['en-US'], customVocabulary: ['Sasha', 'Fashion Barn'] } as any,
       realtimeInputConfig: {
         automaticActivityDetection: {
           startOfSpeechSensitivity: 'START_SENSITIVITY_LOW' as any,
           endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH' as any,
-          // Speech must last 400 ms before it counts as him talking over her, so a cough, a door or
-          // background chatter doesn't cut her off mid-sentence (that's what sounded like stuttering).
-          prefixPaddingMs: Number(process.env.PREFIX_MS ?? 400),
+          // 200 ms: tried 400 ms, and the audio got worse in a real call, so back to what worked.
+          prefixPaddingMs: Number(process.env.PREFIX_MS ?? 200),
           silenceDurationMs: Number(process.env.SILENCE_MS ?? 500),
         },
       },
@@ -118,12 +120,15 @@ function watchCamera(ctx: JobContext) {
   return { take: () => (Date.now() - latestAt < CAMERA_STALE_MS ? latest : null) };
 }
 
+// Shared between the call and the camera loop: when she asked him to step back.
+const flowRef: { stepBackAt?: number } = {};
 const t0 = Date.now();
 const log = (msg: string, extra?: unknown) =>
   console.log(`[sasha +${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`, extra ?? '');
 
 export default defineAgent({
   entry: async (ctx: JobContext) => {
+    flowRef.stepBackAt = undefined;
     await ctx.connect();
     log(`room joined  avatar=${AVATAR} gemini=${GEMINI} vision=${VISION}`);
 
@@ -157,6 +162,7 @@ export default defineAgent({
       ['build_around', /build around/i],
       ['see_it_question', /see it on you/i],
       ['sizes_question', /(what are you in|your sizes?|what size|waist).*\?/i],
+      ['closing', /ready whenever you|check ?out whenever|take care|see you|enjoy (the|your)|have (a|fun)/i],
       ['second_outfit', /other (four |three |two )?days|days off|second outfit|another (look|outfit) for/i],
     ];
     function heardHerSay(text: string) {
@@ -164,6 +170,7 @@ export default defineAgent({
         if (!flow.done.has(key) && re.test(text)) {
           flow.done.add(key);
           record('flow', { done: key });
+          if (key === 'step_back') flowRef.stepBackAt = Date.now() + 2000; // give him a moment to get there
           quietNote(`APP NOTE (not from the shopper): ${flow.note()} Keep moving to the next step.`);
         }
       }
@@ -178,17 +185,24 @@ export default defineAgent({
     let toolSince = 0;
     let filledThisTool = false;
     let lastNudgeAt = 0;
+    let herLastStart = 0;
     const owe = (why: string, gap: number) => { owed = { why, since: Date.now(), gap }; };
     function nudge(why: string) {
       if (!liveSession) return;
       lastNudgeAt = Date.now();
       log(`dead air: ${why}`);
       record('nudge', { why });
-      liveSession.sendClientEvent({ type: 'content', value: { turns: [{ role: 'user', parts: [{ text: `APP NOTE (not from the shopper): it's been quiet for a couple of seconds. ${why} Carry on talking naturally from exactly where you left off. Don't repeat what you already said, don't greet him again, and don't mention this note.` }] }], turnComplete: true } });
+      liveSession.sendClientEvent({ type: 'content', value: { turns: [{ role: 'user', parts: [{ text: `APP NOTE (not from the shopper): it's been quiet for a couple of seconds. ${why} Carry on naturally from exactly where you left off. If you just asked him a question, don't ask it again: wait for him. Don't repeat yourself, don't greet him again, and don't mention this note.` }] }], turnComplete: true } });
     }
     const watchdog = setInterval(() => {
-      if (process.env.WATCHDOG === 'off' || agentState === 'speaking' || userSpeaking || Date.now() - lastNudgeAt < 5000) return;
+      if (process.env.WATCHDOG === 'off' || flow.done.has('closing') || agentState === 'speaking' || userSpeaking || Date.now() - lastNudgeAt < 5000) return;
       if (owed && !toolsRunning && Date.now() - owed.since > owed.gap) { const why = owed.why; owed = null; nudge(why); return; }
+      // He said real words, stopped, and she hasn't started answering for 2.5 s: her turn, so nudge once.
+      if (userStoppedAt && answeredStop !== userStoppedAt && herLastStart < userStoppedAt && wordsAt > userStartedAt && !toolsRunning && Date.now() - userStoppedAt > 2500) {
+        answeredStop = userStoppedAt;
+        nudge('He finished talking and is waiting for your answer.');
+        return;
+      }
       // A slow tool (the outfits, the bag): one quick filler line while it works.
       if (toolsRunning && !filledThisTool && Date.now() - toolSince > 2500) {
         filledThisTool = true;
@@ -207,7 +221,8 @@ export default defineAgent({
         toolsRunning--;
         log(`tool ${name} done in ${Date.now() - toolSince} ms`);
         record('tool_result', { name, ms: Date.now() - toolSince, result: short(result) });
-        owe(`The ${name.replace(/_/g, ' ')} step finished and its result is in: tell him about it and keep the conversation going.`, 2000);
+        const r = result as any;
+        if (r?.ok !== false) owe(`The ${name.replace(/_/g, ' ')} step finished and its result is in: tell him about it and keep the conversation going.`, 2000);
       },
       page: (action: string, args: unknown, result: unknown) => record('page', { action, args: short(args, 300), result: short(result, 300) }),
     };
@@ -227,15 +242,21 @@ export default defineAgent({
 
     // --- Timing: when you stop talking -> when Sasha starts talking.
     let userStoppedAt = 0;
+    // His words as they're heard. A stretch of "him talking" with no words in it was noise, not a turn.
+    let userStartedAt = 0, wordsAt = 0, answeredStop = 0;
+    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => { if (ev.transcript.trim().length > 1) wordsAt = Date.now(); });
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
+      if (ev.newState === 'speaking') userStartedAt = Date.now();
       userSpeaking = ev.newState === 'speaking';
       if (userSpeaking && agentState === 'speaking') record('interrupted', {});
-      if (ev.oldState === 'speaking') { flow.userTurns++; userStoppedAt = Date.now(); owe('He finished talking and is waiting for your answer.', 2500); }
+      // No reminder here: a flicker of noise also looks like "he stopped talking". The reminder waits for
+      // his actual words (the transcript below), so it never fires while he's still thinking of an answer.
+      if (ev.oldState === 'speaking') { flow.userTurns++; userStoppedAt = Date.now(); }
     });
     session.on(voice.AgentSessionEventTypes.AgentStateChanged, (ev) => {
       agentState = ev.newState;
       record('sasha_state', { state: ev.newState });
-      if (ev.newState === 'speaking') owed = null;
+      if (ev.newState === 'speaking') { owed = null; herLastStart = Date.now(); }
       else if (pendingNotes.length) for (const n of pendingNotes.splice(0)) quietNote(n);
       if (ev.newState === 'speaking' && userStoppedAt) {
         log(`reply started ${Date.now() - userStoppedAt} ms after you stopped`);
@@ -250,6 +271,7 @@ export default defineAgent({
         log(`${item.role === 'user' ? 'YOU' : 'SASHA'}: ${text}`);
         record(item.role === 'user' ? 'you' : 'sasha', { text, interrupted: item.interrupted || undefined });
         if (item.role === 'assistant') { heardHerSay(text); flow.said.push({ text, turn: flow.userTurns }); }
+        if (item.role === 'user' && /^(that'?s it|no,? (i think )?we'?re good|thanks|thank you|bye)/i.test(text.trim())) flow.done.add('closing');
       }
     });
     session.on(voice.AgentSessionEventTypes.MetricsCollected, (ev) => {
@@ -310,7 +332,12 @@ export default defineAgent({
         const brightness = channels.reduce((sum, c) => sum + c.mean, 0) / channels.length;
         setCamStatus(brightness < 15 ? 'dark' : 'on');
         // Full-size photo for the try-on test (tests/try-on.ts), refreshed every 10 s.
-        if (camStatus === 'on' && Date.now() - lastSnapAt > 10000) {
+        // After she asks him to step back, a shot every 2 s for 8 s, then that full-length one is kept
+        // for the try-ons (he'll likely sit back down, and a close-up makes a worse try-on).
+        const stepBackAt = flowRef.stepBackAt;
+        const snapEvery = stepBackAt && Date.now() - stepBackAt < 8000 ? 2000 : 10000;
+        const frozen = stepBackAt && Date.now() - stepBackAt >= 8000;
+        if (camStatus === 'on' && !frozen && Date.now() - lastSnapAt > snapEvery) {
           lastSnapAt = Date.now();
           await sharp(Buffer.from(rgba.data), { raw: { width: rgba.width, height: rgba.height, channels: 4 } })
             .removeAlpha().jpeg({ quality: 90 }).toFile('snapshot.jpg');

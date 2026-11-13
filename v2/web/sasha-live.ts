@@ -69,9 +69,12 @@ body.sl-nobar{padding-right:0!important}
 @media (max-width:640px){.sl-self{width:120px}.sl-corner{width:220px;height:280px}.sl-caption{font-size:17px}}
 .sl-cursor{position:fixed;left:0;top:0;z-index:700;width:30px;height:30px;pointer-events:none;opacity:0;transition:transform .75s cubic-bezier(.3,.9,.3,1),opacity .3s;filter:drop-shadow(0 3px 6px rgba(0,0,0,.35))}
 .sl-cursor.sl-on{opacity:1}
+.sl-lens{position:fixed;left:0;top:0;z-index:695;width:118px;height:118px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 2px #d4664a,0 8px 22px rgba(0,0,0,.28);background-repeat:no-repeat;background-color:#f4f1ec;pointer-events:none;opacity:0;transform:scale(.6);transition:opacity .3s,transform .35s cubic-bezier(.3,.9,.3,1)}
+.sl-lens.sl-on{opacity:1;transform:scale(1)}
+.sl-lens i{position:absolute;left:50%;bottom:-30px;transform:translateX(-50%);font:600 11px/1 "Hanken Grotesk",system-ui,sans-serif;font-style:normal;background:#fff;color:#2a2420;padding:5px 8px;border-radius:999px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.18)}
 .sl-cursor b{position:absolute;left:24px;top:22px;font:600 11px/1 "Hanken Grotesk",system-ui,sans-serif;background:#d4664a;color:#fff;padding:4px 7px;border-radius:999px;white-space:nowrap}
 .sl-cursor.sl-press svg{transform:scale(.82);transition:transform .12s}
-.sl-ring{position:fixed;z-index:690;pointer-events:none;border:2px solid #d4664a;border-radius:10px;box-shadow:0 0 0 6px rgba(212,102,74,.18),0 0 0 9999px rgba(20,16,12,.18);opacity:0;transition:all .45s cubic-bezier(.3,.9,.3,1)}
+.sl-ring{position:fixed;z-index:690;pointer-events:none;border:2px solid #d4664a;border-radius:10px;box-shadow:0 0 0 5px rgba(212,102,74,.16);opacity:0;transition:all .45s cubic-bezier(.3,.9,.3,1)}
 .sl-ring.sl-on{opacity:1}
 .sl-ripple{position:fixed;z-index:695;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;border:2px solid #d4664a;pointer-events:none;animation:sl-rip .6s ease-out forwards}
 @keyframes sl-rip{from{transform:scale(.3);opacity:1}to{transform:scale(1.6);opacity:0}}
@@ -163,7 +166,41 @@ reveal.addEventListener('click', (e) => { if (e.target === reveal) hideReveal();
 declare const byId: Record<string, any>, img: (p: any, i?: number) => string, title: (s: string) => string, esc: (s: unknown) => string, money: (n: number) => string, priceHtml: (p: any) => string, main: HTMLElement;
 const cursor = el('div', 'sl-cursor', '<svg viewBox="0 0 24 24" width="30" height="30"><path d="M4 2l16 9-7 2-3 7z" fill="#d4664a" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg><b>Sasha</b>');
 const ring = el('div', 'sl-ring');
-document.body.append(ring, cursor);
+const lens = el('div', 'sl-lens', '<i></i>');
+document.body.append(ring, lens, cursor);
+let lensTimer: ReturnType<typeof setTimeout> | undefined;
+// Glide the pointer onto a spot in the big product photo (x, y from 0 to 1000 of the picture itself)
+// and show that spot magnified beside it, with a short label. Nothing else on the page changes.
+async function hoverPhoto(a: { x: number; y: number; detail?: string }) {
+  const im = document.querySelector<HTMLImageElement>('.gal-main img');
+  if (!im || !im.naturalWidth) return { ok: false, error: 'No product photo on screen' };
+  const box = im.getBoundingClientRect();
+  if (box.top < 60 || box.bottom > innerHeight) { sashaScrolls(); im.scrollIntoView({ behavior: 'smooth', block: 'center' }); await wait(500); }
+  const r = im.getBoundingClientRect();
+  // object-fit: contain, so find where the picture actually sits inside the img box.
+  const k = Math.min(r.width / im.naturalWidth, r.height / im.naturalHeight);
+  const w = im.naturalWidth * k, h = im.naturalHeight * k;
+  const left = r.left + (r.width - w) / 2, top = r.top + (r.height - h) / 2;
+  const px = left + (Math.max(0, Math.min(1000, a.x)) / 1000) * w, py = top + (Math.max(0, Math.min(1000, a.y)) / 1000) * h;
+  ring.classList.remove('sl-on'); ringOn = null;
+  cursor.style.transform = `translate(${px}px, ${py}px)`;
+  cursor.classList.add('sl-on');
+  const Z = 2.6, L = 118;
+  const lx = px + 34 + L > innerWidth ? px - 34 - L : px + 34, ly = Math.max(10, py - L - 10);
+  Object.assign(lens.style, {
+    transform: '', left: `${lx}px`, top: `${ly}px`, backgroundImage: `url("${im.currentSrc || im.src}")`,
+    backgroundSize: `${w * Z}px ${h * Z}px`, backgroundPosition: `${L / 2 - (px - left) * Z}px ${L / 2 - (py - top) * Z}px`,
+  });
+  (lens.querySelector('i') as HTMLElement).textContent = a.detail ?? '';
+  (lens.querySelector('i') as HTMLElement).style.display = a.detail ? '' : 'none';
+  lens.classList.add('sl-on');
+  clearTimeout(lensTimer);
+  clearTimeout(ringTimer);
+  lensTimer = setTimeout(() => lens.classList.remove('sl-on'), 2600);
+  ringTimer = setTimeout(() => cursor.classList.remove('sl-on'), 6000);
+  return { ok: true };
+}
+addEventListener('scroll', () => { if (Date.now() > sashaScrollUntil) lens.classList.remove('sl-on'); }, { passive: true });
 let ringTimer: ReturnType<typeof setTimeout> | undefined;
 let sashaActing = 0; // clicks Sasha makes herself are not reported as his
 let sashaScrollUntil = 0; // nor are her scrolls
@@ -329,10 +366,11 @@ const actions: Record<string, (a: Action) => unknown> = {
   point: (a) => { shrink(); return pointAt(String(a.target), !!a.click); },
   scroll: (a) => { shrink(); return scrollPage(String(a.to)); },
   open_bag: () => { if (document.getElementById('bag-drawer')?.hidden) document.getElementById('bag-open')?.click(); return { ok: true }; },
+  hover_photo: (a) => hoverPhoto(a as any),
   where: () => ({ ok: true, page: location.hash || '#/', targets: availableTargets() }),
   // Flip the product page's gallery to one photo (clicks its thumbnail, waiting for the page to render).
   show_photo: async (a) => {
-    shrink(); hideReveal();
+    shrink(); hideReveal(); lens.classList.remove('sl-on');
     for (let t = 0; t < 20; t++) {
       const b = document.querySelector<HTMLButtonElement>(`.thumbs button[data-i="${a.index}"]`);
       if (b) { b.click(); sashaScrolls(); document.querySelector('.gal')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return { ok: true }; }
@@ -341,6 +379,9 @@ const actions: Record<string, (a: Action) => unknown> = {
     return { ok: false, error: 'The product page is not showing that photo' };
   },
 };
+
+// For testing in the browser with ?sasha_debug: run any of Sasha's page actions from the console.
+if (params.has('sasha_debug')) (window as any).sashaDo = (action: string, args: Action = {} as Action) => actions[action]?.(args);
 
 async function onBarn(data: RpcInvocationData) {
   try {

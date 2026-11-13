@@ -233,10 +233,12 @@ Build ${4 - outfits.length} new outfits that stay under budget and differ from: 
 
 // ---- Photo walkthrough: what each product photo shows, so Sasha can flip through them and talk ----
 const SITE_PHOTOS = 'https://mhalpert.github.io/mens-fashion-barn/data/catalog/';
-const photoNotes = new Map<string, Promise<string[]>>();
+const photoNotes = new Map<string, Promise<PhotoNote[]>>();
 
 /** One short note per product photo (the angle and the fine details you can see), cached per product. */
-export function describePhotos(p: any): Promise<string[]> {
+/** What a photo shows, and where its fine details sit (x, y from 0 to 1000, left/top = 0), so the pointer can glide over them. */
+export type PhotoNote = { say: string; spots: { detail: string; x: number; y: number }[] };
+export function describePhotos(p: any): Promise<PhotoNote[]> {
   if (!photoNotes.has(p.id)) {
     const run = (async () => {
       const pics = await Promise.all(p.images.map(async (path: string) => {
@@ -249,14 +251,18 @@ export function describePhotos(p: any): Promise<string[]> {
         contents: [{ role: 'user', parts: [
           ...pics.map((data) => ({ inlineData: { mimeType: 'image/webp', data } })),
           { text: `These are the ${pics.length} product photos, in order, for "${p.title}" by ${p.brand}. Product copy: ${p.description ?? ''}
-For each photo, write one or two short spoken sentences a stylist would say while showing it: the angle or view, then the fine details you can actually see in it (fabric texture, stitching, buttons, lining, collar, cuffs, hardware, how it drapes or fits on the model). Only what is visible. No prices.` },
+For each photo, write one or two short spoken sentences a stylist would say while showing it: the angle or view, then the fine details you can actually see in it (fabric texture like herringbone or ribbing, stitching, buttons, lining, collar, cuffs, hardware, how it drapes or fits on the model). Only what is visible. No prices.
+Also give the one or two details of this product itself (never the model, other clothes or props) that you mention and that sit in a specific spot, each with a 2-4 word label and its point in that photo: x and y from 0 to 1000 (x from the left edge, y from the top edge), right on the detail. Say them in the same order as in your sentences.` },
         ] }],
         config: {
           responseMimeType: 'application/json',
-          responseSchema: { type: Type.OBJECT, properties: { photos: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ['photos'] },
+          responseSchema: { type: Type.OBJECT, required: ['photos'], properties: { photos: { type: Type.ARRAY, items: { type: Type.OBJECT, required: ['say', 'spots'], properties: {
+            say: { type: Type.STRING },
+            spots: { type: Type.ARRAY, items: { type: Type.OBJECT, required: ['detail', 'x', 'y'], properties: { detail: { type: Type.STRING }, x: { type: Type.NUMBER }, y: { type: Type.NUMBER } } } },
+          } } } } },
         },
       });
-      return (JSON.parse(res.text ?? '{}').photos ?? []) as string[];
+      return (JSON.parse(res.text ?? '{}').photos ?? []) as PhotoNote[];
     })();
     run.catch(() => photoNotes.delete(p.id));
     photoNotes.set(p.id, run);
