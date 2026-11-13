@@ -8,6 +8,10 @@
 # Keys come from the service's environment (LIVEKIT_*, GOOGLE_API_KEY, ...), never from files in the image.
 FROM node:24-slim
 
+# The LiveKit room connection (native code in @livekit/rtc-node) needs the system's root certificates,
+# which the slim image leaves out. Without them every call fails with "no native root CA certificates found".
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app/v2
 COPY v2/package.json v2/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
