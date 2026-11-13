@@ -98,7 +98,7 @@ function home() {
 }
 
 // Filtering and sorting live outside shop() so window.Barn (barn.js) gets exactly what the page shows.
-const filtersFrom = (q) => ({ g: q.get("g"), dept: q.get("dept"), style: q.get("style"), brand: q.get("brand"), color: q.get("color"), max_price: q.get("max_price"), size: q.get("size"), sale: q.get("sale"), new: q.get("new"), q: q.get("q"), sort: q.get("sort") || "featured" });
+const filtersFrom = (q) => ({ g: q.get("g"), dept: q.get("dept"), style: q.get("style"), brand: q.get("brand"), color: q.get("color"), max_price: q.get("max_price"), size: q.get("size"), sale: q.get("sale"), new: q.get("new"), q: q.get("q"), sort: q.get("sort") || "featured", ids: q.get("ids"), h: q.get("h") });
 // In stock in the shopper's size. Sizes differ by category: "40R", "15.5 / 32-33", "10" (shoes); a bare waist like "32" also matches "32x30" and "32W | 33-35L".
 const normSize = (s) => String(s).toLowerCase().replace(/\s+/g, "");
 function inSize(p, want) {
@@ -151,6 +151,7 @@ function textMatch(p, q) {
 
 function matches(p, f, skip) {
   return (skip === "g" || !f.g || p.gender === f.g) && (skip === "dept" || !f.dept || deptOf(p) === f.dept) && (skip === "style" || !f.style || p.style === f.style) && (skip === "brand" || !f.brand || p.brand === f.brand) && (!f.sale || p.simulated.on_sale) && (!f.new || p.simulated.just_in)
+    && (!f.ids || f.ids.split(",").includes(p.id)) // Sasha V2 picks exact items from her own search
     && (!f.color || (p.colors.join(" ") + " " + p.title).toLowerCase().includes(String(f.color).toLowerCase()))
     && (!(+f.max_price > 0) || p.simulated.price <= +f.max_price)
     && (!f.size || inSize(p, f.size))
@@ -167,12 +168,13 @@ function shop(q) {
   const f = filtersFrom(q);
   const link = (k, v) => { const n = new URLSearchParams(q); n.delete("sort"); if (f.sort !== "featured") n.set("sort", f.sort); if (n.get(k) === v) n.delete(k); else n.set(k, v); return "#/shop?" + n; };
   const match = (p, skip) => matches(p, f, skip);
-  const r = sortProducts(P.filter((p) => match(p)), f.sort);
+  const order = f.ids ? f.ids.split(",") : null;
+  const r = order && f.sort === "featured" ? P.filter((p) => match(p)).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id)) : sortProducts(P.filter((p) => match(p)), f.sort);
   const extra = [f.color && `in ${f.color}`, +f.max_price > 0 && `under ${money(+f.max_price)}`, f.size && `size ${f.size}`].filter(Boolean).join(" · ");
   const group = (name, k, vals) => `<div class="fgroup"><h2>${name}</h2>${vals.map(([v, n, lab]) => `<a href="${link(k, v)}"${f[k] === v ? ' aria-current="true"' : ""}><span>${esc(lab || v)}</span><span>${n}</span></a>`).join("")}</div>`;
   const count = (fn, skip) => { const c = {}; P.filter((p) => match(p, skip)).forEach((p) => { const v = fn(p); c[v] = (c[v] || 0) + 1; }); return c; };
   const gc = count((p) => p.gender, "g"), dc = count(deptOf, "dept"), sc = count((p) => p.style, "style"), bc = count((p) => p.brand, "brand");
-  const head = f.q ? `Results for "${f.q}"` : f.new ? "Just in" : f.sale ? "On sale" : f.dept || f.style || f.brand || ({ women: "Women", men: "Men" })[f.g] || "All clothing";
+  const head = f.h ? f.h : f.q ? `Results for "${f.q}"` : f.new ? "Just in" : f.sale ? "On sale" : f.dept || f.style || f.brand || ({ women: "Women", men: "Men" })[f.g] || "All clothing";
   main.innerHTML = `<div class="container"><div class="shop-head"><h1>${esc(head)}</h1></div>
    <div class="shop"><details class="filters" ${innerWidth > 960 ? "open" : ""}><summary>Filter</summary>
     ${group("Shop", "g", [["women", gc.women || 0, "Women"], ["men", gc.men || 0, "Men"]])}

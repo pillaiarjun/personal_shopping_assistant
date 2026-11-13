@@ -55,6 +55,16 @@
       return sortProducts(P.filter((p) => matches(p, f)), f.sort).slice(0, 5).map(brief);
     },
 
+    // Sasha V2: shows exactly these products, in this order, under a heading. Her search runs on the agent side.
+    showIds(ids = [], heading = "") {
+      const keep = ids.filter((id) => byId[id]);
+      if (!keep.length) return { ok: false, error: "None of those products exist" };
+      const n = new URLSearchParams({ ids: keep.join(",") });
+      if (heading) n.set("h", heading);
+      location.hash = "#/shop?" + n;
+      return { ok: true, shown: keep.length };
+    },
+
     // Look up a product without changing the page (Soham's $10,000 check uses the price).
     getProduct(id) {
       const p = byId[id];

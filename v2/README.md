@@ -1,3 +1,21 @@
+# Sasha V2: the store call (Gemini Live)
+
+Run it (three terminals, from v2/):
+
+    npm install
+    npm run embed      # once: builds catalog/embeddings.json (about 10 s)
+    npm run server     # token + try-on images on http://localhost:8790
+    npm run dev        # the agent (Gemini Live voice, eyes and store tools)
+
+Then serve the repo root (for example `python3 -m http.server 8766`), open http://localhost:8766/site/ and press **Talk to Sasha**. Use headphones.
+
+- web/sasha-live.ts: the call button, Sasha's full-screen stage that shrinks to the corner, captions, the try-on reveal. Rebuild with `npm run build:web`.
+- store-tools.ts: her tools (search, show a product, three outfits, the try-on reveal, add to bag). They drive the page over LiveKit RPC.
+- store.ts: catalog search with Gemini embeddings and the 3-outfit builder. tryon.ts: the head-to-toe studio try-on.
+- tests/tools-test.ts runs the tools without a call.
+
+---
+
 # Sasha V2 prototype
 
 A small test of the Gemini hackathon setup: Gemini Live is Sasha's voice, brain and eyes, and a Tavus face (Olivia) lip-syncs to her. Built on LiveKit Agents (Node).

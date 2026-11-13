@@ -1,6 +1,6 @@
 // Sasha V2 prototype: Gemini Live (voice + brain + eyes) with an optional Tavus face.
 //
-// Run:   node agent.ts dev        (then talk to it in the LiveKit Agent Console)
+// Run:   node agent.ts dev   and   node server.ts, then open the store (site/) and press Talk to Sasha.
 //
 // Switches in .env.local:
 //   AVATAR=tavus | none     (default none: voice only)
@@ -19,6 +19,7 @@ import dotenv from 'dotenv';
 import { writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { storeTools } from './store-tools.ts';
 
 dotenv.config({ path: '.env.local' });
 
@@ -28,8 +29,9 @@ const VISION = (process.env.VISION ?? 'on') !== 'off';
 const VOICE = process.env.GEMINI_VOICE ?? 'Aoede';
 const FRAME_WIDTH = Number(process.env.FRAME_WIDTH ?? 768);
 
-// Sasha's personality, adapted from pal/system-prompt.md for Gemini Live (no store tools yet).
+// The full Sasha prompt (sasha-prompt.md); the store tools are in store-tools.ts.
 const INSTRUCTIONS = readFileSync(new URL('./sasha-prompt.md', import.meta.url), 'utf8');
+const GREETING = "Hey, I'm Sasha, your AI stylist here at Fashion Barn. Here's the deal: I get to know you, check out what you've got on, then I pull looks from our racks and show you how they look on you. What's your name?";
 
 // Gemini Live takes camera frames on its `video` input. The plugin sends them as `media`,
 // which gemini-3.8-live ignores (tested), so re-label image chunks as video.
@@ -116,7 +118,7 @@ export default defineAgent({
     await ctx.connect();
     log(`room joined  avatar=${AVATAR} gemini=${GEMINI} vision=${VISION}`);
 
-    const agent = new voice.Agent({ instructions: INSTRUCTIONS });
+    const agent = new voice.Agent({ instructions: INSTRUCTIONS, tools: storeTools(ctx, log) });
     const session = new voice.AgentSession({ llm: makeModel() });
 
     // --- Timing: when you stop talking -> when Sasha starts talking.
@@ -241,7 +243,7 @@ export default defineAgent({
       log('room tracks\n   ' + lines.join('\n   '));
     };
     setTimeout(roomReport, 12000);
-    session.generateReply({ instructions: 'Introduce yourself as Sasha in one short, warm line with a bit of attitude, then ask their name.' });
+    session.generateReply({ instructions: `Say this greeting in your own voice, with energy, keeping every word: "${GREETING}"` });
   },
 });
 
