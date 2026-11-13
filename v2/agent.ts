@@ -189,6 +189,7 @@ export default defineAgent({
     let filledThisTool = false;
     let lastNudgeAt = 0;
     let herLastStart = 0;
+    let lastPageCallAt = 0;
     const owe = (why: string, gap: number) => { owed = { why, since: Date.now(), gap }; };
     function nudge(why: string) {
       if (!liveSession) return;
@@ -227,7 +228,7 @@ export default defineAgent({
         const r = result as any;
         if (r?.ok !== false) owe(`The ${name.replace(/_/g, ' ')} step finished and its result is in: tell him about it and keep the conversation going.`, 2000);
       },
-      page: (action: string, args: unknown, result: unknown) => record('page', { action, args: short(args, 300), result: short(result, 300) }),
+      page: (action: string, args: unknown, result: unknown) => { lastPageCallAt = Date.now(); record('page', { action, args: short(args, 300), result: short(result, 300) }); },
     };
 
     // --- What he does on the page himself: logged, and the bigger moves passed to her quietly.
@@ -236,7 +237,10 @@ export default defineAgent({
       try {
         const a = JSON.parse(new TextDecoder().decode(payload));
         record('shopper', a);
-        if (a.kind === 'page' || a.kind === 'click') quietNote(`APP NOTE (not from the shopper's voice): on the page he just ${a.kind === 'page' ? `opened ${a.detail}` : `clicked "${a.detail}" (page ${a.hash || '#/'})`}. Only bring it up if it helps.`);
+        // A page change right after her own page action is her doing, not his: no note (it made her talk on).
+        if (a.kind === 'page' && Date.now() - lastPageCallAt < 2500) return;
+        if (a.kind === 'click') flow.clickedAt = Date.now(); // the pointer tour stops following the old script
+        if (a.kind === 'page' || a.kind === 'click') quietNote(`APP NOTE (not from the shopper's voice): on the page he just ${a.kind === 'page' ? `opened ${a.detail}` : `clicked "${a.detail}" (page ${a.hash || '#/'})`}. Whatever you were in the middle of is over: don't finish it. Only say something if this click changes what you should talk about.`);
       } catch { /* ignore */ }
     });
 
@@ -247,7 +251,13 @@ export default defineAgent({
     let userStoppedAt = 0;
     // His words as they're heard. A stretch of "him talking" with no words in it was noise, not a turn.
     let userStartedAt = 0, wordsAt = 0, answeredStop = 0;
-    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => { if (ev.transcript.trim().length > 1) wordsAt = Date.now(); });
+    // His words so far this turn (the transcript may come in pieces or whole; either way keep the full line).
+    let hisTurnAt = 0;
+    const hearHim = (t: string) => {
+      if (hisTurnAt !== userStartedAt) { hisTurnAt = userStartedAt; flow.his = ''; }
+      flow.his = t.startsWith(flow.his) ? t : `${flow.his} ${t}`.trim();
+    };
+    session.on(voice.AgentSessionEventTypes.UserInputTranscribed, (ev) => { if (ev.transcript.trim().length > 1) { wordsAt = Date.now(); hearHim(ev.transcript); } });
     session.on(voice.AgentSessionEventTypes.UserStateChanged, (ev) => {
       if (ev.newState === 'speaking') { userStartedAt = Date.now(); }
       userSpeaking = ev.newState === 'speaking';
@@ -275,6 +285,7 @@ export default defineAgent({
         log(`${item.role === 'user' ? 'YOU' : 'SASHA'}: ${text}`);
         record(item.role === 'user' ? 'you' : 'sasha', { text, interrupted: item.interrupted || undefined });
         if (item.role === 'assistant') { heardHerSay(text); flow.said.push({ text, turn: flow.userTurns }); }
+        if (item.role === 'user') flow.his = text;
         if (item.role === 'user' && /^(that'?s it|no,? (i think )?we'?re good|thanks|thank you|bye)/i.test(text.trim())) flow.done.add('closing');
       }
     });

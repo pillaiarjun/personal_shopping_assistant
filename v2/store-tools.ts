@@ -3,7 +3,7 @@
 // method "barn" (handled in web/sasha-live.ts, which calls window.Barn in site/barn.js).
 import { type JobContext, llm } from '@livekit/agents';
 import { z } from 'zod';
-import { brief, buildOutfits, byId, describePhotos, details, search, type Outfit, type PhotoNote } from './store.ts';
+import { brief, buildOutfits, byId, catalogSlot, describePhotos, details, search, type Outfit, type PhotoNote } from './store.ts';
 import { readSnapshot, tryOn } from './tryon.ts';
 
 type Log = (msg: string, extra?: unknown) => void;
@@ -17,7 +17,7 @@ export interface ToolHooks {
   flow?: Flow;
 }
 /** The call's progress, kept in code so Sasha doesn't ask the same thing twice. */
-export interface Flow { done: Set<string>; note(): string | undefined; userTurns: number; said: { text: string; turn: number }[] }
+export interface Flow { done: Set<string>; note(): string | undefined; userTurns: number; said: { text: string; turn: number }[]; /** His latest words. */ his: string; /** When he last clicked something on the page himself. */ clickedAt: number }
 export function newFlow(): Flow {
   const LABELS: Record<string, string> = {
     new_arrivals: 'shown the new arrivals', vibe_question: 'asked whether he is shopping for an event or occasion',
@@ -30,6 +30,8 @@ export function newFlow(): Flow {
     done,
     userTurns: 0,
     said: [],
+    his: '',
+    clickedAt: 0,
     note: () => (done.size ? `Already done in this call, so never again: ${[...done].map((k) => LABELS[k] ?? k).join('; ')}.` : undefined),
   };
 }
@@ -95,10 +97,35 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
   function tour(steps: (() => Promise<unknown>)[], gapMs: number) {
     clearTimeout(tourTimer);
     let k = 0;
-    const next = async () => { if (k < steps.length) { await steps[k++](); tourTimer = setTimeout(next, gapMs); } };
+    const started = Date.now();
+    // He clicked somewhere himself: the tour is over, the pointer stops following the old script.
+    const next = async () => { if (k < steps.length && (hooks?.flow?.clickedAt ?? 0) < started) { await steps[k++](); tourTimer = setTimeout(next, gapMs); } };
     return next();
   }
   let picked: number | null = null;
+  // Which outfit he means. Names beat numbers: Gemini guessed "1" when he said "the Linen Sunset Edge".
+  // Order of trust: the name she passed, then a name in his latest words, then the number.
+  const STOP = new Set(['the', 'and', 'with', 'look', 'outfit', 'one']);
+  const nameWords = (t: string) => t.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 2 && !STOP.has(w));
+  function byName(text?: string): number | undefined {
+    if (!text || !outfits.length) return undefined;
+    const said = new Set(nameWords(text));
+    const scores = outfits.map((o) => nameWords(o.outfit_name).filter((w) => said.has(w) || [...said].some((x) => x.length > 3 && (x.startsWith(w) || w.startsWith(x)))).length);
+    const best = Math.max(...scores);
+    return best > 0 && scores.filter((x) => x === best).length === 1 ? scores.indexOf(best) + 1 : undefined;
+  }
+  function whichOutfit(number?: number, name?: string): number | undefined {
+    // "the second one", "the middle one": he gave a position, so the number stands over loose name words.
+    const his = hooks?.flow?.his ?? '';
+    const gavePosition = /\b(first|second|third|last|middle|left|right|number (one|two|three|1|2|3))\b/i.test(his);
+    const n = byName(name) ?? (gavePosition ? undefined : byName(his)) ?? number ?? picked ?? undefined;
+    if (n && number && n !== number) log(`outfit: she said ${number}, he meant ${n} (${outfits[n - 1]?.outfit_name})`);
+    return n && outfits[n - 1] ? n : undefined;
+  }
+  const outfitParams = {
+    outfit_name: z.string().optional().describe('The outfit\'s name, exactly as shown, like "Linen Sunset Edge". Always give it when he named one.'),
+    outfit_number: z.number().int().min(1).max(3).optional().describe('1, 2 or 3, left to right on his screen.'),
+  };
   // She sometimes names a piece instead of giving its id ("the jacket", "product_id_jacket_outfit_2").
   // Find the real product: an exact id, an id inside the text, or a piece of the picked outfit whose slot/title matches.
   const SLOT_WORDS: Record<string, string[]> = { shoes: ['shoe', 'loafer', 'sneaker', 'boot', 'footwear'], pants: ['pant', 'trouser', 'chino', 'jean', 'denim', 'bottom', 'waist'], top: ['shirt', 'polo', 'sweater', 'knit', 'tee', 'top'], outer: ['jacket', 'blazer', 'coat', 'suit', 'outer', 'layer'] };
@@ -145,6 +172,8 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           })),
         };
   }
+
+  const showPick = (o: Outfit) => page('show_pick', { name: o.outfit_name, intro: o.difference, total_usd: o.total_usd, items: o.items.map(({ product_id, slot }) => ({ product_id, slot })) });
 
   const tools = {
     search_products: llm.tool({
@@ -252,18 +281,20 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
 
     pick_outfit: llm.tool({
       description: 'The moment he picks one of the three outfits: puts that outfit on its own on his screen, every piece with its price and the total, and moves your pointer to each piece in turn, a few seconds apart, while you walk him through them.',
-      parameters: z.object({ outfit_number: z.number().int().min(1).max(3) }),
-      execute: async ({ outfit_number }) => {
+      parameters: z.object(outfitParams),
+      execute: async ({ outfit_name, outfit_number: asked }) => {
+        if (!outfits.length) return { ok: false, error: 'Build the outfits first.' };
+        const outfit_number = whichOutfit(asked, outfit_name);
+        if (!outfit_number) return { ok: false, error: `Which one? Ask him: ${outfits.map((o) => o.outfit_name).join(', ')}.` };
         const o = outfits[outfit_number - 1];
-        if (!o) return { ok: false, error: 'Build the outfits first.' };
         picked = outfit_number;
-        await page('show_pick', { name: o.outfit_name, intro: o.difference, total_usd: o.total_usd, items: o.items.map(({ product_id, slot }) => ({ product_id, slot })) });
+        await showPick(o);
         await tour(o.items.map((it) => () => (picked === outfit_number ? page('point', { target: `product:${it.product_id}` }) : Promise.resolve())), PIECE_SECONDS * 1000);
         hooks?.flow?.done.add('picked');
         return {
-          ok: true, name: o.outfit_name, how_it_works: o.why_it_works, total_usd: o.total_usd,
+          ok: true, name: o.outfit_name, on_his_screen_now: `${o.outfit_name}: talk about this one only, by this name.`, how_it_works: o.why_it_works, total_usd: o.total_usd,
           pieces_in_order: o.items.map((it, i) => ({ pointer_on_it_at_second: i * PIECE_SECONDS, slot: it.slot, why: it.why, ...details(byId[it.product_id]) })),
-          how: `It's on his screen on its own now, with each price and the total. Your pointer moves to each piece in this order, every ${PIECE_SECONDS} seconds, starting now: talk about them in the same order, one or two sentences each, and what makes the pairing work. Then ask "Want to see it on you?"`,
+          how: `It's on his screen on its own now, with each price and the total. Your pointer moves to each piece in this order, every ${PIECE_SECONDS} seconds, starting now: talk about them in the same order, one or two sentences each, and what makes the pairing work. If he also asked to change a piece (another color, a different shoe), call swap_piece right after this instead of asking. Otherwise end with "Want to see it on you?"`,
           already: hooks?.flow?.note(),
         };
       },
@@ -271,10 +302,12 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
 
     show_on_me: llm.tool({
       description: 'The reveal: show him a picture of himself wearing one of the three outfits, head to toe. Call it the moment he says yes to "Want to see it on you?", or asks to see any of the three on himself.',
-      parameters: z.object({ outfit_number: z.number().int().min(1).max(3) }),
-      execute: async ({ outfit_number }) => {
-        const i = outfit_number - 1;
-        if (!outfits[i]) return { ok: false, error: 'Build the outfits first.' };
+      parameters: z.object(outfitParams),
+      execute: async ({ outfit_name, outfit_number: asked }) => {
+        if (!outfits.length) return { ok: false, error: 'Build the outfits first.' };
+        const n = whichOutfit(asked, outfit_name);
+        if (!n) return { ok: false, error: `Which one? Ask him: ${outfits.map((o) => o.outfit_name).join(', ')}.` };
+        const i = n - 1;
         clearTimeout(tourTimer);
         await page('tryon_loading', { title: outfits[i].outfit_name });
         try {
@@ -286,6 +319,62 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           await page('tryon_hide');
           return { ok: false, error: (e as Error).message };
         }
+      },
+    }),
+
+    swap_piece: llm.tool({
+      description: 'Change one piece of an outfit: "keep the shirt but in white", "different shoes", "something cheaper than that jacket". Finds the closest piece in the same slot (in the color he asked for, if any), puts it into the outfit on his screen with the new total, and moves your pointer to it. His try-on picture is redone with the new piece.',
+      parameters: z.object({
+        ...outfitParams,
+        piece: z.string().describe('Which piece to change: its product_id, or its slot like "shirt", "shorts", "shoes".'),
+        color: z.string().optional().describe('The color he wants instead, like "white". Leave out if he did not say one.'),
+        wish: z.string().optional().describe('Anything else he wants from the new piece: "more casual", "linen", "under $50".'),
+        new_product_id: z.string().optional().describe('Only when he picked one of the alternatives you offered: its product_id.'),
+      }),
+      execute: async ({ outfit_name, outfit_number: asked, piece, color, wish, new_product_id }) => {
+        if (!outfits.length) return { ok: false, error: 'Build the outfits first.' };
+        const n = whichOutfit(asked, outfit_name);
+        if (!n) return { ok: false, error: `Which outfit? Ask him: ${outfits.map((o) => o.outfit_name).join(', ')}.` };
+        const o = outfits[n - 1];
+        const oldId = resolveId(piece, n);
+        const slotItem = o.items.find((it) => it.product_id === oldId);
+        if (!slotItem) return { ok: false, error: `Which piece? This outfit has: ${o.items.map((it) => `${it.slot} (${brief(byId[it.product_id]).title}, ${it.product_id})`).join('; ')}.` };
+        const old = byId[slotItem.product_id];
+        let pick = new_product_id ? byId[resolveId(new_product_id) ?? new_product_id] : undefined;
+        let others: any[] = [];
+        if (!pick) {
+          const type = brief(old).title.replace(/\b(ivory|white|black|navy|blue|green|red|grey|gray|brown|tan|beige|olive|cream|pink|yellow|orange|purple|khaki|stone|sand|charcoal|embroidered)\b/gi, '').trim();
+          const query = [color, type, wish].filter(Boolean).join(' ');
+          const found = (await search({ query, gender: old.gender, slots: [catalogSlot(old.id)].filter(Boolean) as string[], limit: 12 }))
+            .filter((p) => p.id !== old.id && !o.items.some((it) => it.product_id === p.id));
+          const c = color?.toLowerCase().split(/\s+/).pop();
+          const inColor = c ? found.filter((p) => `${brief(p).color} ${p.colors?.join(' ')} ${p.title}`.toLowerCase().includes(c)) : found;
+          const pool = inColor.length ? inColor : found;
+          [pick, ...others] = pool;
+          others = others.slice(0, 2);
+          if (!pick) return { ok: false, error: 'Nothing close enough in the store. Tell him, and offer a different color or style.' };
+        }
+        slotItem.product_id = pick.id;
+        slotItem.why = `Swapped in for the ${brief(old).title} at his request.`;
+        o.total_usd = o.items.reduce((sum, it) => sum + (byId[it.product_id]?.simulated.price ?? 0), 0);
+        pictures[n - 1] = null; // his try-on picture is redone with the new piece
+        picked = n;
+        clearTimeout(tourTimer);
+        await showPick(o);
+        await page('point', { target: `product:${pick.id}` });
+        picture(n - 1);
+        hooks?.flow?.done.add('swapped');
+        const wanted = color?.toLowerCase().split(/\s+/).pop();
+        return {
+          ok: true, outfit: o.outfit_name, removed: brief(old).title,
+          now_in_the_outfit: details(pick), new_total_usd: o.total_usd,
+          color_match: !wanted ? undefined : !`${brief(pick).color} ${pick.title}`.toLowerCase().includes(wanted)
+            ? `Nothing ${color} in stock for this slot; this is the closest. Say so.`
+            : `The ${brief(old).title} only comes in ${brief(old).color}, so this is the closest ${color} piece in the store. Say that plainly, then sell it.`,
+          other_options: others.map((p) => brief(p)),
+          how: 'It is swapped on his screen and your pointer is on it. Tell him in a sentence or two what you put in and why it works with the rest, say the new total, then ask "Want to see it on you?" If he wants one of the other options, call swap_piece again with its new_product_id.',
+          already: hooks?.flow?.note(),
+        };
       },
     }),
 

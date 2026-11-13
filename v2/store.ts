@@ -29,6 +29,8 @@ const enriched: Record<string, any> = JSON.parse(readFileSync(root('./catalog/en
 const EMB_FILE = root('./catalog/embeddings.json');
 const vectors: Record<string, number[]> = existsSync(EMB_FILE) ? JSON.parse(readFileSync(EMB_FILE, 'utf8')) : {};
 export const byId: Record<string, any> = Object.fromEntries(products.map((p) => [p.id, p]));
+/** The catalog slot of a product ("top", "bottom", "shoes"...). */
+export const catalogSlot = (id: string): string | undefined => enriched[id]?.slot;
 export const storeReady = Object.keys(vectors).length > 0;
 
 let client: GoogleGenAI | null = null; // made on first use, after the caller loads .env.local

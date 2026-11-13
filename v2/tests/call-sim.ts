@@ -36,11 +36,13 @@ const { url, token } = await (await fetch('http://localhost:8790/token')).json()
 const room = new Room();
 const actions: Record<string, unknown> = {};
 const bag: any[] = []; // what the fake store has bagged
+let looks: string[] = []; // outfit names on screen, for lines like "I like the {outfit2}"
 room.localParticipant!; // set after connect
 await room.connect(url, token, { autoSubscribe: true, dynacast: false });
 room.localParticipant!.registerRpcMethod('barn', async (data) => {
   const a = JSON.parse(data.payload);
   log(`PAGE ${a.action} ${JSON.stringify({ ...a, action: undefined, result: a.result ? `${a.result.looks.length} looks` : undefined }).slice(0, 160)}`);
+  if (a.action === 'show_looks') looks = a.result.looks.map((l: any) => l.outfit_name);
   if (a.action === 'add_to_bag') { bag.push(a); return JSON.stringify({ ok: true, size: a.size, count: bag.length }); }
   if (a.action === 'get_bag') return JSON.stringify({ ok: true, count: bag.length, total: 0 });
   return JSON.stringify(actions[a.action] ?? { ok: true, sizes: ['M', 'L'], colors: ['default'] });
@@ -95,7 +97,7 @@ for (const line of LINES) {
   if (!ok) log('!! Sasha never finished (or never spoke): sending the next line anyway');
   // A leading "~" speaks the line quietly (25% volume), "~~" very quietly (10%), like a short mumbled "yes".
   const quiet = line.startsWith('~~') ? 0.1 : line.startsWith('~') ? 0.25 : 1;
-  const text = line.replace(/^~+/, '');
+  const text = line.replace(/^~+/, '').replace(/\{outfit(\d)\}/g, (_, n) => looks[+n - 1] ?? `outfit ${n}`);
   log(`YOU${quiet < 1 ? ` (volume ${quiet * 100}%)` : ''}: ${text}`);
   queue = speech(text).map((v) => Math.round(v * quiet));
   pos = 0;
