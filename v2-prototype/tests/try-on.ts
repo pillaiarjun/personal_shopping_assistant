@@ -6,13 +6,16 @@
 // Writes tryon/<productId>-<model>.jpg and prints how long it took.
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { existsSync } from 'node:fs';
 import sharp from 'sharp';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 dotenv.config({ path: '.env.local', quiet: true });
 
+const CATALOG_PATHS = ['../../data/catalog/products.json', '../../personal_shopping_assistant/data/catalog/products.json'];
+const CATALOG_FILE = CATALOG_PATHS.map((p) => new URL(p, import.meta.url)).find((u) => existsSync(u))!;
 const [productId = 'MW-0230', photoPath = 'snapshot.jpg', model = 'gemini-3.1-flash-lite-image'] = process.argv.slice(2);
 const catalog = JSON.parse(
-  await readFile(new URL('../../personal_shopping_assistant/data/catalog/products.json', import.meta.url), 'utf8'),
+  await readFile(CATALOG_FILE, 'utf8'),
 );
 const product = catalog.find((p: any) => p.id === productId);
 if (!product) throw new Error(`No product ${productId}`);

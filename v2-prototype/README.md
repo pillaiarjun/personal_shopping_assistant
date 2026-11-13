@@ -25,3 +25,9 @@ A small test of the Gemini hackathon setup: Gemini Live is Sasha's voice, brain 
 - **First read:** after "Hi, I'm Mike," she says what she sees ("navy track jacket over a white tee, very off-duty"), pulls up pieces in that lane, then asks: "Is that the vibe today, or are we dressing you for something?" Camera off: she skips the read and asks the question.
 - **Just In:** 116 items (about 1 in 9, spread across every department) are marked `simulated.just_in`, shown as "Just in" pills in the store, with a Just In page and filter. `search_products` takes `just_in: true`, so when she says something just came in, it's true.
 - **Catalog knowledge:** no RAG. A one-page cheat sheet in her prompt, a fast search tool over Gemini embeddings of the enriched catalog, and about 100 to 150 pre-built outfits with "complete the look" matches.
+
+## Enriched catalog
+
+`catalog/enriched.json` adds stylist fields to all 1,046 products, keyed by product id: outfit `slot`, `photo_color` and `color_family` (what the photo shows; `listed_colors` has every color sold), `pattern`, `fabric`, `fit`, `formality` (1 gym to 5 black tie), `seasons`, `occasions`, a factual `visual_description` for search, a `sasha_line` in her voice, and `pairs_with`.
+
+Made by `node catalog/enrich.ts` (Gemini 3.5 Flash Lite reads each product photo and text; re-runs skip finished items), then `node catalog/cleanup.ts` (photo vs listed colors, tuxedos and gowns to formality 5, rewrites repeated Sasha lines). Three items have photos that don't match their title (WW-0256, WW-0316, WW-0349), marked `photo_matches_title: false`.
