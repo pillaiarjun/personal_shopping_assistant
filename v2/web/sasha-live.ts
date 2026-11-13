@@ -67,7 +67,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''):
 }
 
 document.head.append(el('style', '', css));
-const sashaImg = new URL('sasha.jpg', location.href).href;
+const sashaImg = new URL('./sasha-olivia.jpg', import.meta.url).href; // Olivia, the cast face (web/public/)
 
 // ---- launch button ----
 const launch = el('button', 'sl-launch', `<img src="${sashaImg}" alt=""><span>Talk to Sasha</span>`);
@@ -192,7 +192,7 @@ async function start() {
     });
   } catch (e) {
     console.error('[sasha-live]', e);
-    setStatus(`Couldn't connect: ${(e as Error).message}. Is v2/server.ts running?`);
+    setStatus(e instanceof TypeError ? "Couldn't reach Sasha's server. Is v2/server.ts running?" : `Couldn't start: ${(e as Error).message}.`);
   }
 }
 

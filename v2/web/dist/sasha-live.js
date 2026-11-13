@@ -24211,7 +24211,7 @@ function tr(i, e = "", t = "") {
   return e && (n.className = e), t && (n.innerHTML = t), n;
 }
 document.head.append(tr("style", "", av));
-const Rl = new URL("sasha.jpg", location.href).href, Xn = tr("button", "sl-launch", `<img src="${Rl}" alt=""><span>Talk to Sasha</span>`);
+const Rl = new URL("./sasha-olivia.jpg", import.meta.url).href, Xn = tr("button", "sl-launch", `<img src="${Rl}" alt=""><span>Talk to Sasha</span>`);
 Xn.type = "button";
 document.body.append(Xn);
 document.getElementById("stylist-toggle")?.setAttribute("hidden", "");
@@ -24296,7 +24296,7 @@ async function Al() {
       await le.localParticipant.setCameraEnabled(!a), o.textContent = a ? "Camera on" : "Camera off", o.classList.toggle("sl-off", a);
     });
   } catch (i) {
-    console.error("[sasha-live]", i), Nr(`Couldn't connect: ${i.message}. Is v2/server.ts running?`);
+    console.error("[sasha-live]", i), Nr(i instanceof TypeError ? "Couldn't reach Sasha's server. Is v2/server.ts running?" : `Couldn't start: ${i.message}.`);
   }
 }
 async function Cs() {
