@@ -1,7 +1,7 @@
 // Sasha V2 call page: the store's "Talk to Sasha" call over LiveKit, with Gemini Sasha (v2/agent.ts).
 // Built to v2/web/dist/sasha-live.js (npm run build:web) and loaded by site/index.html after barn.js.
 //
-// - Opens full screen with Sasha and the shopper's own camera preview, then shrinks to the corner
+// - Opens full screen with Sasha and the shopper's own camera preview, then shrinks into the sidebar's video spot (corner on small screens)
 //   the first time she puts something on the page.
 // - The agent drives the store with RPC calls on method "barn" (see the handlers below).
 // - The try-on reveal shows the agent's picture of the shopper wearing the look.
@@ -18,9 +18,19 @@ const SERVER = (params.get('v2_server') ?? 'http://localhost:8790').replace(/\/+
 const barn = () => window.Barn;
 
 const css = `
-.sl-launch{position:fixed;right:24px;bottom:24px;z-index:60;display:flex;align-items:center;gap:10px;padding:10px 18px 10px 10px;border:0;border-radius:999px;background:#111;color:#fff;font:500 15px/1 "Hanken Grotesk",system-ui,sans-serif;cursor:pointer;box-shadow:0 8px 30px rgba(0,0,0,.25)}
+.sl-launch{position:fixed;right:24px;bottom:24px;z-index:450;display:flex;align-items:center;gap:10px;padding:10px 18px 10px 10px;border:0;border-radius:999px;background:#111;color:#fff;font:500 15px/1 "Hanken Grotesk",system-ui,sans-serif;cursor:pointer;box-shadow:0 8px 30px rgba(0,0,0,.25)}
 .sl-launch img{width:40px;height:40px;border-radius:50%;object-fit:cover}
-.sl-stage{position:fixed;z-index:70;background:#0e0e10;color:#fff;font-family:"Hanken Grotesk",system-ui,sans-serif;transition:all .6s cubic-bezier(.2,.8,.2,1);overflow:hidden}
+body.sl-nobar .stylist{display:none!important}
+body.sl-nobar{padding-right:0!important}
+.sl-docked{border-radius:0}
+.sl-docked .sl-center{padding:0 12px 64px;gap:6px}
+.sl-docked .sl-face{width:96px}
+.sl-docked .sl-name{font-size:18px}
+.sl-docked .sl-caption{display:none}
+.sl-docked .sl-self{top:10px;right:10px;width:96px}
+.sl-docked .sl-bar{bottom:12px;gap:8px}
+.sl-docked .sl-bar button{padding:8px 12px;font-size:12px}
+.sl-stage{position:fixed;z-index:500;background:#0e0e10;color:#fff;font-family:"Hanken Grotesk",system-ui,sans-serif;transition:all .6s cubic-bezier(.2,.8,.2,1);overflow:hidden}
 .sl-full{inset:0;border-radius:0}
 .sl-corner{right:20px;bottom:20px;width:300px;height:330px;border-radius:20px;box-shadow:0 16px 50px rgba(0,0,0,.35)}
 .sl-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;padding:0 16px 120px}
@@ -46,7 +56,7 @@ const css = `
 .sl-corner .sl-bar button{padding:9px 12px;font-size:12px}
 .sl-bar .sl-end{background:#d6453d}
 .sl-bar .sl-off{background:#fff;color:#111}
-.sl-reveal{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;background:rgba(10,10,12,.72);backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .4s}
+.sl-reveal{position:fixed;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;background:rgba(10,10,12,.72);backdrop-filter:blur(6px);opacity:0;pointer-events:none;transition:opacity .4s}
 .sl-reveal.sl-on{opacity:1;pointer-events:auto}
 .sl-card{position:relative;background:#fff;color:#111;border-radius:22px;padding:18px;max-width:min(520px,92vw);box-shadow:0 30px 80px rgba(0,0,0,.4);transform:scale(.94);transition:transform .5s cubic-bezier(.2,.8,.2,1)}
 .sl-on .sl-card{transform:none}
@@ -73,16 +83,36 @@ const sashaImg = new URL('./sasha-olivia.jpg', import.meta.url).href; // Olivia,
 const launch = el('button', 'sl-launch', `<img src="${sashaImg}" alt=""><span>Talk to Sasha</span>`);
 launch.type = 'button';
 document.body.append(launch);
+// The store's "Your stylist" sidebar stays hidden until Sasha shrinks. Then, on wide screens, the
+// sidebar comes back and she docks into its video spot; on small screens she sits in the corner.
+document.body.classList.add('sl-nobar');
 document.getElementById('stylist-toggle')?.setAttribute('hidden', '');
+const wide = matchMedia('(min-width: 75rem)'); // the store's own sidebar breakpoint (site/stylist.css)
+const slot = document.getElementById('avatar-slot');
 
 let room: Room | null = null;
 let stage: HTMLElement | null = null;
 let shrunk = false;
 
+function place() {
+  if (!stage || !shrunk) return;
+  const docked = wide.matches && !!slot;
+  document.body.classList.toggle('sl-nobar', !docked);
+  stage.classList.toggle('sl-docked', docked);
+  stage.classList.toggle('sl-corner', !docked);
+  if (!docked) return stage.removeAttribute('style');
+  const r = slot!.getBoundingClientRect();
+  Object.assign(stage.style, { top: `${r.top}px`, left: `${r.left}px`, width: `${r.width}px`, height: `${Math.max(r.height, 240)}px` });
+}
+addEventListener('resize', place);
+wide.addEventListener('change', place);
+
 function shrink() {
   if (!stage || shrunk) return;
   shrunk = true;
-  stage.classList.replace('sl-full', 'sl-corner');
+  stage.classList.remove('sl-full');
+  document.body.classList.remove('sl-nobar');
+  requestAnimationFrame(place); // after the sidebar is back, so its slot can be measured
 }
 
 function setStatus(text: string) {
@@ -205,6 +235,8 @@ async function end() {
   stage = null;
   hideReveal();
   launch.hidden = false;
+  document.body.classList.add('sl-nobar');
+  shrunk = false;
 }
 
 launch.addEventListener('click', start);
