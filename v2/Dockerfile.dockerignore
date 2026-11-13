@@ -1,0 +1,12 @@
+# Used by `docker build -f v2/Dockerfile .` (BuildKit reads <Dockerfile>.dockerignore). Paths are from the repo root.
+# Never ship keys, local logs or this Mac's node_modules into the image.
+**/.env*
+!**/.env.local.example
+**/node_modules
+v2/logs
+v2/tryon
+v2/*.log
+v2/*.jpg
+v2/casting/voices
+data/raw
+data/catalog/images

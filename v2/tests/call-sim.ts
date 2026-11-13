@@ -82,7 +82,7 @@ room.on(RoomEvent.TrackSubscribed, async (track: RemoteTrack) => {
     if (sum / (d.length / 8) > 300) lastLoud = Date.now();
   }
 });
-async function waitForSasha(quietMs = 1800, maxMs = 45000) {
+async function waitForSasha(quietMs = 2600, maxMs = 45000) {
   const start = Date.now();
   await sleep(1500);
   while (Date.now() - start < maxMs) {

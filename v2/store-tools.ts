@@ -170,6 +170,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
   };
   const knownSize = (p: any) => { const k = sizeKind(p); return k ? hooks?.flow?.sizes[k] : undefined; };
   const sameAsKnown = (p: any, size?: string) => { const k = sizeKind(p), known = knownSize(p); return !!(k && known && size && sizeCore(k, size) === known); };
+  const bagged = new Set<string>(); // product ids put in his bag this call
   const heardAt = new Map<string, number>(); // when she was handed it
   const heard = new Map<string, number>(); // "MW-0383:L" -> his turn count when she was told to read it back (or offered it)
   let lastBuild: { budget: number; at: number; run: Promise<unknown> } | null = null;
@@ -431,6 +432,19 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         items = items.map((it) => ({ ...it, product_id: resolveId(it.product_id, outfit_number) ?? it.product_id }));
         // Pieces in a size he already confirmed this call need no read-back; a missing size is filled in from his known one.
         items = items.map((it) => ({ ...it, size: it.size || knownSize(byId[it.product_id]) }));
+        // Bagging the look (two or more of its pieces): any piece she left out goes in too when its size is known,
+        // from his confirmed sizes or from a piece of the same kind in this call (a vest takes his top size).
+        const look = outfit_number ? outfits[outfit_number - 1] : undefined;
+        if (look && look.items.filter((o) => items.some((it) => it.product_id === o.product_id)).length >= 2) {
+          for (const o of look.items) {
+            const p = byId[o.product_id];
+            if (!p || bagged.has(o.product_id) || items.some((it) => it.product_id === o.product_id)) continue;
+            const k = sizeKind(p);
+            const same = k ? items.find((it) => it.size && byId[it.product_id] && sizeKind(byId[it.product_id]) === k) : undefined;
+            const size = p.size_type === 'one' ? undefined : knownSize(p) ?? (same ? sizeCore(k!, same.size!) : undefined);
+            if (p.size_type === 'one' || size) items.push({ product_id: o.product_id, size });
+          }
+        }
         const allKnown = items.every((it) => !byId[it.product_id] || byId[it.product_id].size_type === 'one' || sameAsKnown(byId[it.product_id], it.size));
         if (!sizes_read_back_and_confirmed && !allKnown) return { ok: false, error: 'Read his sizes back to him first ("Large blazer, 32 waist, size 10 loafers, right?") and wait for his yes.' };
         const slotOf = (id: string) => outfits[(outfit_number ?? picked ?? 1) - 1]?.items.find((it) => it.product_id === id)?.slot ?? byId[id]?.category;
@@ -462,7 +476,10 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           return out.filter(Boolean);
         };
         const recent = (hooks?.flow?.said ?? []).filter((x) => x.turn <= turns).slice(-4).map((x) => ` ${x.text.toLowerCase().replace(/[^a-z0-9. ]+/g, ' ')} `);
-        const saidIt = (size?: string) => !size || recent.some((t) => forms(size).some((f) => new RegExp(`(^|[^a-z0-9.])${f.replace('.', '\\.')}(?! (one|two|three|four|five|six|seven|eight|nine)\\b)([^a-z0-9]|$)`).test(t.replace(/-/g, ' '))));
+        const mentions = (lines: string[], size?: string) => !size || lines.some((t) => forms(size).some((f) => new RegExp(`(^|[^a-z0-9.])${f.replace('.', '\\.')}(?! (one|two|three|four|five|six|seven|eight|nine)\\b)([^a-z0-9]|$)`).test(t.replace(/-/g, ' '))));
+        // He said this size himself in his last few lines ("large on top, 36 waist, size 12 shoes"): nothing to read back.
+        const hisRecent = [...(hooks?.flow?.hisLines ?? [])].slice(-3).map((t) => ` ${t.toLowerCase().replace(/[^a-z0-9. -]+/g, ' ')} `);
+        const saidIt = (size?: string) => mentions(recent, size) || mentions(hisRecent, size);
         // Loop breaker: if she was already handed this piece to read back a few seconds ago and calls again saying
         // he confirmed, let it through. One read-back round at most, never a loop.
         const handedAt = new Map<string, number>(heardAt);
@@ -473,6 +490,10 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           const left = outfit_number ? outfits[outfit_number - 1]?.items.filter((o) => !items.some((it) => it.product_id === o.product_id)).map((o) => brief(byId[o.product_id]).title) : [];
           return { ok: false, left_out_of_this_call: left?.length ? left : undefined, not_yet: `Nothing is in his bag yet. Never tell him it is, even if he asks: that would be a lie he sees on screen. Read this back to him in your own words and wait for his yes: ${say}. When he says yes, call add_to_bag again with the same pieces and sizes.` };
         }
+        // Pieces already in his bag from this call aren't added again (she re-sends the whole outfit when fixing one size).
+        const already_in_bag = items.filter((it) => bagged.has(it.product_id)).map((it) => brief(byId[it.product_id]).title);
+        items = items.filter((it) => !bagged.has(it.product_id));
+        if (!items.length) return { ok: true, already_in_bag, note: 'All of these are already in his bag. Nothing was added twice.' };
         const added = [], sold_out = [];
         for (const it of items) {
           const p = byId[it.product_id];
@@ -487,13 +508,14 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
           }
           const r = await page('add_to_bag', { id: p.id, size });
           added.push({ ...item(p.id), ok: r.ok, size: r.size ?? size, error: r.error ?? undefined });
+          if (r.ok) bagged.add(p.id);
           const kind = sizeKind(p);
           if (r.ok && kind && hooks?.flow) hooks.flow.sizes[kind] = sizeCore(kind, it.size ?? size);
         }
         const bag = await page('get_bag');
         if (added.some((a) => a.ok)) { await page('open_bag'); hooks?.flow?.done.add('bagged'); }
         return {
-          added, sold_out: sold_out.length ? sold_out : undefined, bag_items: bag.count, bag_total_usd: bag.total,
+          added, already_in_bag: already_in_bag.length ? already_in_bag : undefined, sold_out: sold_out.length ? sold_out : undefined, bag_items: bag.count, bag_total_usd: bag.total,
           note: sold_out.length
             ? 'Tell him what went in. For each sold-out piece, offer the nearest size in stock or to find him a similar piece in his size (search_products), and only add it once he says yes.'
             : 'His bag is open on his screen. Tell him what went in, in which sizes, and the bag total.',

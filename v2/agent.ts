@@ -57,7 +57,8 @@ class LiveGemini extends google.beta.realtime.RealtimeModel {
     // when the result lands. For quick tools whose result decides what she should say (the bag, the reveal,
     // a swap, a pick) the result cuts in (INTERRUPT): the guess is dropped after a word or two and she says
     // what really happened. A repeated call's copy of an earlier result is filed silently.
-    const QUICK = new Set(['add_to_bag', 'show_on_me', 'swap_piece', 'pick_outfit']);
+    // build_outfits too: she once invented three outfit names while it ran; the real ones now cut in.
+    const QUICK = new Set(['add_to_bag', 'show_on_me', 'swap_piece', 'pick_outfit', 'build_outfits']);
     const results = s.getToolResultsForRealtime;
     s.getToolResultsForRealtime = function (this: any, ...a: any[]) {
       const out = results.apply(this, a);
@@ -229,6 +230,9 @@ export default defineAgent({
     }
     const watchdog = setInterval(() => {
       if (process.env.WATCHDOG === 'off' || flow.done.has('closing') || agentState === 'speaking' || userSpeaking || Date.now() - lastNudgeAt < 5000) return;
+      // She just asked him something ("Want to see it on you?"): it's his turn, so no push to keep going.
+      const lastLine = flow.said[flow.said.length - 1]?.text.trim() ?? '';
+      if (owed && lastLine.endsWith('?') && herLastStop > owed.since) owed = null;
       if (owed && !toolsRunning && Date.now() - owed.since > owed.gap) { const why = owed.why; owed = null; nudge(why); return; }
       // He said real words, stopped, and she hasn't started answering for 2.5 s: her turn, so nudge once.
       if (userStoppedAt && answeredStop !== userStoppedAt && herLastStart < userStoppedAt && herLastStop < userStoppedAt - 300 && wordsAt > userStartedAt && !toolsRunning && Date.now() - userStoppedAt > 2500) {
@@ -255,7 +259,8 @@ export default defineAgent({
         log(`tool ${name} done in ${Date.now() - toolSince} ms`);
         record('tool_result', { name, ms: Date.now() - toolSince, result: short(result) });
         const r = result as any;
-        if (r?.ok !== false) owe(`The ${name.replace(/_/g, ' ')} step finished and its result is in: tell him about it and keep the conversation going.`, 2000);
+        // Only owe a reply if she's quiet when the result lands; if she's talking, Gemini covers it itself.
+        if (r?.ok !== false && agentState !== 'speaking') owe(`The ${name.replace(/_/g, ' ')} step finished and its result is in: tell him about it and keep the conversation going.`, 2000);
       },
       page: (action: string, args: unknown, result: unknown) => { lastPageCallAt = Date.now(); record('page', { action, args: short(args, 300), result: short(result, 300) }); },
     };
