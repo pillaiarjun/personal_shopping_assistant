@@ -35,6 +35,24 @@ export const storeReady = Object.keys(vectors).length > 0;
 
 let client: GoogleGenAI | null = null; // made on first use, after the caller loads .env.local
 const ai = () => (client ??= new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY }));
+// Free-tier keys get "503 high demand" (and 429 rate limits) when Google is busy. Retry once, then try
+// other light models in turn, so an outfit build doesn't fail on one busy model.
+const FALLBACK_MODELS = (process.env.OUTFIT_FALLBACK_MODELS ?? 'gemini-3.1-flash-lite,gemini-2.5-flash-lite').split(',').filter(Boolean);
+const busy = (e: unknown) => /\b(503|429|500)\b|UNAVAILABLE|RESOURCE_EXHAUSTED|high demand|overloaded/i.test(String((e as Error)?.message ?? e));
+async function generate(params: Parameters<GoogleGenAI['models']['generateContent']>[0]) {
+  const models = [params.model, params.model, ...FALLBACK_MODELS.filter((m) => m !== params.model)];
+  let last: unknown;
+  for (const [i, model] of models.entries()) {
+    try { return await ai().models.generateContent({ ...params, model }); }
+    catch (e) {
+      last = e;
+      if (!busy(e)) throw e;
+      console.warn(`[store] ${model} busy (${String((e as Error).message).slice(0, 80)}), trying ${models[i + 1] ?? 'nothing left'}`);
+      if (i === 0) await new Promise((r) => setTimeout(r, 800));
+    }
+  }
+  throw last;
+}
 
 const norm = (v: number[]) => Math.sqrt(v.reduce((a, x) => a + x * x, 0));
 const norms: Record<string, number> = Object.fromEntries(Object.entries(vectors).map(([id, v]) => [id, norm(v)]));
@@ -204,7 +222,7 @@ Rules:
 ${lists.join('\n\n')}`;
 
   const ask = async (text: string) => {
-    const res = await ai().models.generateContent({
+    const res = await generate({
       model: OUTFIT_MODEL,
       contents: text,
       config: { responseMimeType: 'application/json', responseSchema: outfitSchema, temperature: 0.6 },
@@ -248,7 +266,7 @@ export function describePhotos(p: any): Promise<PhotoNote[]> {
         if (!res.ok) throw new Error(`photo ${res.status}`);
         return Buffer.from(await res.arrayBuffer()).toString('base64');
       }));
-      const res = await ai().models.generateContent({
+      const res = await generate({
         model: OUTFIT_MODEL,
         contents: [{ role: 'user', parts: [
           ...pics.map((data) => ({ inlineData: { mimeType: 'image/webp', data } })),
