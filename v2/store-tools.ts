@@ -17,7 +17,7 @@ export interface ToolHooks {
   flow?: Flow;
 }
 /** The call's progress, kept in code so Sasha doesn't ask the same thing twice. */
-export interface Flow { done: Set<string>; note(): string | undefined; userTurns: number; said: { text: string; turn: number }[]; /** His latest words. */ his: string; /** When he last clicked something on the page himself. */ clickedAt: number }
+export interface Flow { done: Set<string>; note(): string | undefined; userTurns: number; said: { text: string; turn: number }[]; /** His latest words. */ his: string; /** His last few lines. */ hisLines: string[]; /** When he last clicked something on the page himself. */ clickedAt: number }
 export function newFlow(): Flow {
   const LABELS: Record<string, string> = {
     new_arrivals: 'shown the new arrivals', vibe_question: 'asked whether he is shopping for an event or occasion',
@@ -31,6 +31,7 @@ export function newFlow(): Flow {
     userTurns: 0,
     said: [],
     his: '',
+    hisLines: [],
     clickedAt: 0,
     note: () => (done.size ? `Already done in this call, so never again: ${[...done].map((k) => LABELS[k] ?? k).join('; ')}.` : undefined),
   };
@@ -118,7 +119,10 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     // "the second one", "the middle one": he gave a position, so the number stands over loose name words.
     const his = hooks?.flow?.his ?? '';
     const gavePosition = /\b(first|second|third|last|middle|left|right|number (one|two|three|1|2|3))\b/i.test(his);
-    const n = byName(name) ?? (gavePosition ? undefined : byName(his)) ?? number ?? picked ?? undefined;
+    // A name that matches none of the outfits on screen (from an earlier set) means her number is stale too.
+    const staleName = !!name && !byName(name);
+    const valid = (k?: number | null) => (k && outfits[k - 1] ? k : undefined);
+    const n = byName(name) ?? (gavePosition ? undefined : byName(his)) ?? (staleName ? valid(picked) ?? valid(number) : valid(number) ?? valid(picked));
     if (n && number && n !== number) log(`outfit: she said ${number}, he meant ${n} (${outfits[n - 1]?.outfit_name})`);
     return n && outfits[n - 1] ? n : undefined;
   }
@@ -146,6 +150,9 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
   let lastBuild: { budget: number; at: number; run: Promise<unknown> } | null = null;
   async function buildAndShow({ occasion, budget_usd, gender, notes }: { occasion: string; budget_usd: number; gender: 'men' | 'women'; notes?: string }) {
         if (!(budget_usd > 0)) return { ok: false, error: 'Ask for his budget first.' };
+        // She once made up $1,200 when his sentence cut off at "Total budget is". He has to have said a number.
+        const heardNumbers = [...(hooks?.flow?.hisLines ?? []), hooks?.flow?.his ?? ''].some((t) => /\d|hundred|thousand|grand|\bk\b|fifty|twenty|thirty|forty|sixty|seventy|eighty|ninety/i.test(t));
+        if (hooks?.flow && !heardNumbers) return { ok: false, error: "He hasn't told you a number yet. Ask him for his budget and wait for it; never guess one." };
         const result = await buildOutfits({ occasion, budget_usd: Math.min(budget_usd, 10000), gender, notes });
         log(`outfits for "${occasion}" ($${budget_usd}): ${result.outfits.length} in ${result.ms} ms`);
         if (!result.outfits.length) return { ok: false, error: 'No outfits came back. Try a broader occasion or a higher budget.' };
@@ -165,7 +172,8 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         return {
           ok: true,
           already: hooks?.flow?.note(),
-          say_next: 'All three are on his screen now. Even if he spoke while you waited, introduce each one by name in one sentence about its feel and where it shines (its intro), then ask which he likes. Save the piece-by-piece detail for after he picks.',
+          replaces: picked !== null || hooks?.flow?.done.has('outfits') ? 'These replace any outfits from before: only talk about these, by these names.' : undefined,
+          say_next: `${outfits.length === 3 ? 'All three are' : `These ${outfits.length} are`} on his screen now. Even if he spoke while you waited, introduce each one by name in one sentence about its feel and where it shines (its intro), then ask which he likes. Save the piece-by-piece detail for after he picks.`,
           outfits: outfits.map((o, i) => ({
             number: i + 1, name: o.outfit_name, intro: o.difference, how_it_works: o.why_it_works,
             total_usd: o.total_usd, items: o.items.map((it) => ({ slot: it.slot, why: it.why, ...details(byId[it.product_id]) })),
@@ -255,7 +263,12 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
     scroll_page: llm.tool({
       description: 'Scroll his screen to show more of the page: "down", "up", "top", "bottom", or to a target (same names as point_at). Use it when you talk about something below the fold.',
       parameters: z.object({ to: z.string() }),
-      execute: async ({ to }) => { clearTimeout(tourTimer); return page('scroll', { to }); },
+      execute: async ({ to }) => {
+        clearTimeout(tourTimer);
+        const out = await page('scroll', { to });
+        if (out?.ok === false && /detail|description/i.test(to)) return { ...out, hint: 'This is a list, not a product page. If he wants details on a piece, open it with show_product.' };
+        return out;
+      },
     }),
 
     build_outfits: llm.tool({
@@ -306,7 +319,7 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
       execute: async ({ outfit_name, outfit_number: asked }) => {
         if (!outfits.length) return { ok: false, error: 'Build the outfits first.' };
         const n = whichOutfit(asked, outfit_name);
-        if (!n) return { ok: false, error: `Which one? Ask him: ${outfits.map((o) => o.outfit_name).join(', ')}.` };
+        if (!n) return { ok: false, error: `Nothing is showing on his screen, so don't react to a picture. Ask him which one: ${outfits.map((o) => o.outfit_name).join(', ')}.` };
         const i = n - 1;
         clearTimeout(tourTimer);
         await page('tryon_loading', { title: outfits[i].outfit_name });
@@ -401,19 +414,32 @@ export function storeTools(ctx: JobContext, log: Log, hooks?: ToolHooks) {
         // Did she say this size out loud (in her last few lines) before his latest turn?
         const WORDS: Record<string, string> = { xs: 'extra small', s: 'small', m: 'medium', l: 'large', xl: 'extra large', xxl: 'double xl' };
         const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen'];
+        // The ways she might say a size out loud. Store labels can be compound ("L - 42", "36W | 34-36L",
+        // "32x30"): the letter size or the first number is enough ("large", "forty-two", "thirty-six waist").
+        const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+        const spell = (n: number) => (n < 15 ? NUM[n] : n < 20 ? ['fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'][n - 15] : n < 100 ? `${TENS[Math.floor(n / 10)]}${n % 10 ? ` ${NUM[n % 10]}` : ''}` : String(n));
         const forms = (size: string) => {
+          const low = size.toLowerCase();
+          const out: string[] = [];
+          const letter = low.match(/\b(xxs|xs|s|m|l|xl|xxl|xxxl)\b/);
+          if (letter) out.push(letter[1], WORDS[letter[1]] ?? '');
+          const num = low.match(/(\d+)(\.5)?/);
+          if (num) {
+            out.push(num[0], spell(+num[1]));
+            if (num[2]) out.push(`${num[1]} and a half`, `${spell(+num[1])} and a half`);
+          }
           const z = norm(size).replace(/d$/, '');
-          const half = z.match(/^(\d+)\.5$/);
-          return [z, WORDS[z], /^\d+$/.test(z) ? NUM[+z] : undefined, half ? `${half[1]} and a half` : undefined, half ? `${NUM[+half[1]]} and a half` : undefined, ...(/^\d+[rls]$/.test(z) ? [z.slice(0, -1) + ({ r: ' regular', l: ' long', s: ' short' } as any)[z.slice(-1)]] : [])].filter(Boolean) as string[];
+          if (/^\d+[rls]$/.test(z)) out.push(z.slice(0, -1) + ({ r: ' regular', l: ' long', s: ' short' } as any)[z.slice(-1)]);
+          return out.filter(Boolean);
         };
-        const recent = (hooks?.flow?.said ?? []).filter((x) => x.turn < turns).slice(-4).map((x) => ` ${x.text.toLowerCase().replace(/[^a-z0-9. ]+/g, ' ')} `);
-        const saidIt = (size?: string) => !size || recent.some((t) => forms(size).some((f) => new RegExp(`(^|[^a-z0-9.])${f.replace('.', '\\.')}([^a-z0-9]|$)`).test(t)));
+        const recent = (hooks?.flow?.said ?? []).filter((x) => x.turn <= turns).slice(-4).map((x) => ` ${x.text.toLowerCase().replace(/[^a-z0-9. ]+/g, ' ')} `);
+        const saidIt = (size?: string) => !size || recent.some((t) => forms(size).some((f) => new RegExp(`(^|[^a-z0-9.])${f.replace('.', '\\.')}(?! (one|two|three|four|five|six|seven|eight|nine)\\b)([^a-z0-9]|$)`).test(t.replace(/-/g, ' '))));
         const unheard = items.filter((it) => byId[it.product_id] && !((heard.get(pair(it)) ?? Infinity) < turns) && !saidIt(it.size));
         if (unheard.length) {
           for (const it of unheard) if (!heard.has(pair(it))) heard.set(pair(it), turns);
           const say = unheard.map((it) => `${it.size ?? 'one size'} ${brief(byId[it.product_id]).title}`).join(', ');
           const left = outfit_number ? outfits[outfit_number - 1]?.items.filter((o) => !items.some((it) => it.product_id === o.product_id)).map((o) => brief(byId[o.product_id]).title) : [];
-          return { ok: false, left_out_of_this_call: left?.length ? left : undefined, not_yet: `Nothing is in his bag yet, so never say it is. Read this back to him in your own words and wait for his yes: ${say}. When he says yes, call add_to_bag again with the same pieces and sizes.` };
+          return { ok: false, left_out_of_this_call: left?.length ? left : undefined, not_yet: `Nothing is in his bag yet. Never tell him it is, even if he asks: that would be a lie he sees on screen. Read this back to him in your own words and wait for his yes: ${say}. When he says yes, call add_to_bag again with the same pieces and sizes.` };
         }
         const added = [], sold_out = [];
         for (const it of items) {

@@ -189,6 +189,7 @@ export default defineAgent({
     let filledThisTool = false;
     let lastNudgeAt = 0;
     let herLastStart = 0;
+    let herLastStop = 0;
     let lastPageCallAt = 0;
     const owe = (why: string, gap: number) => { owed = { why, since: Date.now(), gap }; };
     function nudge(why: string) {
@@ -202,7 +203,7 @@ export default defineAgent({
       if (process.env.WATCHDOG === 'off' || flow.done.has('closing') || agentState === 'speaking' || userSpeaking || Date.now() - lastNudgeAt < 5000) return;
       if (owed && !toolsRunning && Date.now() - owed.since > owed.gap) { const why = owed.why; owed = null; nudge(why); return; }
       // He said real words, stopped, and she hasn't started answering for 2.5 s: her turn, so nudge once.
-      if (userStoppedAt && answeredStop !== userStoppedAt && herLastStart < userStoppedAt && wordsAt > userStartedAt && !toolsRunning && Date.now() - userStoppedAt > 2500) {
+      if (userStoppedAt && answeredStop !== userStoppedAt && herLastStart < userStoppedAt && herLastStop < userStoppedAt - 300 && wordsAt > userStartedAt && !toolsRunning && Date.now() - userStoppedAt > 2500) {
         answeredStop = userStoppedAt;
         nudge('He finished talking and is waiting for your answer.');
         return;
@@ -271,6 +272,7 @@ export default defineAgent({
       agentState = ev.newState;
       record('sasha_state', { state: ev.newState });
       if (ev.newState === 'speaking') { owed = null; herLastStart = Date.now(); }
+      if (ev.oldState === 'speaking') herLastStop = Date.now();
       else if (pendingNotes.length) for (const n of pendingNotes.splice(0)) quietNote(n);
       if (ev.newState === 'speaking' && userStoppedAt) {
         log(`reply started ${Date.now() - userStoppedAt} ms after you stopped`);
@@ -285,8 +287,8 @@ export default defineAgent({
         log(`${item.role === 'user' ? 'YOU' : 'SASHA'}: ${text}`);
         record(item.role === 'user' ? 'you' : 'sasha', { text, interrupted: item.interrupted || undefined });
         if (item.role === 'assistant') { heardHerSay(text); flow.said.push({ text, turn: flow.userTurns }); }
-        if (item.role === 'user') flow.his = text;
-        if (item.role === 'user' && /^(that'?s it|no,? (i think )?we'?re good|thanks|thank you|bye)/i.test(text.trim())) flow.done.add('closing');
+        if (item.role === 'user') { flow.his = text; flow.hisLines = [...flow.hisLines, text].slice(-4); }
+        if (item.role === 'user' && text.trim().split(/\s+/).length <= 6 && /^(that'?s it|no,? (i think )?we'?re good|thanks|thank you|bye)[.!, ]*(for (now|today|everything))?[.!]*$/i.test(text.trim())) flow.done.add('closing');
       }
     });
     session.on(voice.AgentSessionEventTypes.MetricsCollected, (ev) => {
